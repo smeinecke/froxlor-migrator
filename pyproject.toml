@@ -1,0 +1,69 @@
+[project]
+name = "froxlor-migrator"
+version = "0.1.0"
+description = "Source-side Froxlor migration TUI"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "requests>=2.32.0",
+  "rich>=13.7.0",
+  "tomli>=2.0.1",
+]
+
+[project.scripts]
+froxlor-migrator = "froxlor_migrator.tui:run_app"
+froxlor-migrator-verify = "froxlor_migrator.verify_migration:main"
+
+[dependency-groups]
+dev = [
+  "bandit>=1.9.4",
+  "pyright>=1.1.400",
+  "pytest>=9.0.2",
+  "pytest-cov>=7.0.0",
+  "ruff>=0.11.0",
+  "vulture>=2.15",
+  "xenon>=0.9.3",
+]
+
+[tool.ruff]
+exclude = ["docs", "testing"]
+target-version = "py310"
+line-length = 160
+indent-width = 4  # Same as autopep8 default
+
+[tool.ruff.format]
+quote-style = "double"  # Or "single" if you prefer
+indent-style = "space"  # Use spaces instead of tabs
+line-ending = "lf"  # Keep consistency
+preview = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+include = [
+  "froxlor_migrator",
+  "main.py",
+  "testing/bootstrap/seed_source.py",
+  "testing/bootstrap/build_install_input.py",
+]
+venvPath = "."
+venv = ".venv"
+
+
+[tool.pytest.ini_options]
+addopts = [
+    "--import-mode=importlib",
+    "--cov=froxlor_migrator",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+pythonpath = ["."]
+
+[tool.vulture]
+exclude = ["dist", "build", "venv", ".venv", "tests", "docs"]
+min_confidence = 80
+paths = ["."]
+sort_by_size = true

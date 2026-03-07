@@ -1,0 +1,38 @@
+[
+  {
+    "timestamp": "2026-03-07T15:13:39.602228+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T15:13:39.602362+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T15:13:39.602458+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T15:13:39.602529+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T15:13:39.602610+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T15:13:39.602681+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": true
+  }
+]

@@ -1,0 +1,8 @@
+[
+  {
+    "timestamp": "2026-03-07T14:28:50.316151+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  }
+]

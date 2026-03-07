@@ -1,0 +1,50 @@
+[
+  {
+    "timestamp": "2026-03-07T15:30:06.377514+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.379180+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.380582+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.381835+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.383108+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.570154+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:06.970371+00:00",
+    "kind": "command",
+    "command": "mysqldump  custalpha_wpdemo | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mysql  custalphasql1'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:07.177384+00:00",
+    "kind": "error",
+    "command": "mysqldump  custalpha_wpdemo | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mysql  custalphasql1'",
+    "returncode": 2
+  }
+]

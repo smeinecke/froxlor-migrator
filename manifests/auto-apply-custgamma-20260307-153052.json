@@ -1,0 +1,56 @@
+[
+  {
+    "timestamp": "2026-03-07T15:30:52.440191+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.442045+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.443585+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.444800+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.446064+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.623860+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.950343+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_domains SET dkim=1, dkim_pubkey=CONVERT(0x763d444b494d313b206b3d7273613b20703d4d494942496a414e42676b71686b6947397730424151454641414f43415138414d49494243674b434151454174657374536565646564446b696d5075626c69634b657930303031 USING utf8mb4), dkim_privkey=CONVERT(0x2d2d2d2d2d424547494e2050524956415445204b45592d2d2d2d2d5c6e7365656465642d646b696d2d707269766174652d6b65792d666f722d626f6f7473747261702d74657374735c6e2d2d2d2d2d454e442050524956415445204b45592d2d2d2d2d USING utf8mb4) WHERE domain=CONVERT(0x7365637572652d64656d6f2e74657374 USING utf8mb4);'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:53.430177+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C ./testing/data/source/customers/custgamma/secure-demo.test/ . | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custgamma/secure-demo.test/ && tar -xf - -C /data/customers/custgamma/secure-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/secure-demo.test/'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:53.622016+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C ./testing/data/source/customers/custgamma/redirect-demo.test/ . | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custgamma/redirect-demo.test/ && tar -xf - -C /data/customers/custgamma/redirect-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/redirect-demo.test/'",
+    "dry_run": false
+  }
+]

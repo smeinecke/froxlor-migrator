@@ -1,0 +1,92 @@
+[
+  {
+    "timestamp": "2026-03-07T16:39:48.897668+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:48.899823+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:48.901669+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:48.903066+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:48.904270+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:49.038803+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:49.434621+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_settings SET value='\"'\"'\"'\"'\"'\"'\"'\"'DBNAME'\"'\"'\"'\"'\"'\"'\"'\"' WHERE settinggroup='\"'\"'\"'\"'\"'\"'\"'\"'customer'\"'\"'\"'\"'\"'\"'\"'\"' AND varname='\"'\"'\"'\"'\"'\"'\"'\"'mysqlprefix'\"'\"'\"'\"'\"'\"'\"'\"';'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:49.604463+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_wpdemo | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_wpdemo'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:49.767625+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_analytics | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_analytics'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:49.939450+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root mysql -e '\"'\"'ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_wpdemo'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'%'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*A4895CDC403870001F47DB32D207E6C8B82A78F3'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_wpdemo'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'localhost'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*A4895CDC403870001F47DB32D207E6C8B82A78F3'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_wpdemo'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'target-db'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*A4895CDC403870001F47DB32D207E6C8B82A78F3'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_wpdemo'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'127.0.0.1'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*A4895CDC403870001F47DB32D207E6C8B82A78F3'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_wpdemo'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'127.0.0.1'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*A4895CDC403870001F47DB32D207E6C8B82A78F3'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_analytics'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'%'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*3E46BCA9D60B51A5E01C8450F9D9EB64031F471B'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_analytics'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'localhost'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*3E46BCA9D60B51A5E01C8450F9D9EB64031F471B'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_analytics'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'target-db'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*3E46BCA9D60B51A5E01C8450F9D9EB64031F471B'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_analytics'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'127.0.0.1'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*3E46BCA9D60B51A5E01C8450F9D9EB64031F471B'\"'\"'\"'\"'\"'\"'\"'\"'; ALTER USER IF EXISTS '\"'\"'\"'\"'\"'\"'\"'\"'custalpha_analytics'\"'\"'\"'\"'\"'\"'\"'\"'@'\"'\"'\"'\"'\"'\"'\"'\"'127.0.0.1'\"'\"'\"'\"'\"'\"'\"'\"' IDENTIFIED VIA mysql_native_password USING '\"'\"'\"'\"'\"'\"'\"'\"'*3E46BCA9D60B51A5E01C8450F9D9EB64031F471B'\"'\"'\"'\"'\"'\"'\"'\"';'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:50.103969+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_customers SET password=CONVERT(0x243279243132243676455659484276444b79444a4c727a72583048796573714c586137696e37797078372f443566694a68436c6c3666553659475171 USING utf8mb4) WHERE customerid=1;'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:50.265578+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE ftp_users SET password=CONVERT(0x243524644d5076586e6b696a625a726c677768244341384c6a667238344f48437143774f4f4a54637a66544a6d627363346e337a3162396e6c316937656a34 USING utf8mb4) WHERE customerid=1 AND username=CONVERT(0x63757374616c706861 USING utf8mb4);'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:50.428104+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_htpasswds SET password=CONVERT(0x243279243132245536663039474a764e38744879744f70693335734e4f504a475631565a3644624a584c4e474c303568457354482f55364652434a32 USING utf8mb4) WHERE customerid=1 AND path=CONVERT(0x2f7661722f637573746f6d6572732f776562732f63757374616c7068612f676f6163636573732f USING utf8mb4) AND username=CONVERT(0x63757374616c706861 USING utf8mb4);'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:50.591714+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /home/stefan/github/froxlor-migrator/testing/data/source/customers/custalpha/wp-demo.test/ . | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custalpha/wp-demo.test/ && tar -xf - -C /data/customers/custalpha/wp-demo.test/ && sudo chown -R www-data:www-data /data/customers/custalpha/wp-demo.test/'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:39:51.201494+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /home/stefan/github/froxlor-migrator/testing/data/source/customers/custalpha/static-demo.test/ . | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custalpha/static-demo.test/ && tar -xf - -C /data/customers/custalpha/static-demo.test/ && sudo chown -R www-data:www-data /data/customers/custalpha/static-demo.test/'",
+    "dry_run": false
+  }
+]

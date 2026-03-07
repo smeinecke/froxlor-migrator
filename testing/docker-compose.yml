@@ -1,0 +1,119 @@
+services:
+  source-db:
+    image: mariadb:11
+    container_name: froxlor-source-db
+    restart: unless-stopped
+    command: ["--skip-name-resolve=0"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${SOURCE_DB_ROOT_PASSWORD:-source-root}
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: ${SOURCE_DB_NAME:-froxlor}
+      MYSQL_USER: ${SOURCE_DB_USER:-froxlor}
+      MYSQL_PASSWORD: ${SOURCE_DB_PASSWORD:-froxlor}
+    volumes:
+      - ./data/source/db:/var/lib/mysql
+    ports:
+      - "${SOURCE_DB_PORT:-33061}:3306"
+    networks:
+      - source-net
+
+  target-db:
+    image: mariadb:11
+    container_name: froxlor-target-db
+    restart: unless-stopped
+    command: ["--skip-name-resolve=0"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${TARGET_DB_ROOT_PASSWORD:-target-root}
+      MYSQL_ROOT_HOST: "%"
+      MYSQL_DATABASE: ${TARGET_DB_NAME:-froxlor}
+      MYSQL_USER: ${TARGET_DB_USER:-froxlor}
+      MYSQL_PASSWORD: ${TARGET_DB_PASSWORD:-froxlor}
+    volumes:
+      - ./data/target/db:/var/lib/mysql
+    ports:
+      - "${TARGET_DB_PORT:-33062}:3306"
+    networks:
+      - target-net
+
+  source-froxlor:
+    build:
+      context: ./froxlor
+      dockerfile: Dockerfile
+    container_name: froxlor-source
+    restart: unless-stopped
+    depends_on:
+      - source-db
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      MYSQL_HOST: source-db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${SOURCE_DB_NAME:-froxlor}
+      MYSQL_USER: ${SOURCE_DB_USER:-froxlor}
+      MYSQL_PASSWORD: ${SOURCE_DB_PASSWORD:-froxlor}
+      MYSQL_ROOT_USER: ${SOURCE_DB_ROOT_USER:-root}
+      MYSQL_ROOT_PASSWORD: ${SOURCE_DB_ROOT_PASSWORD:-source-root}
+    ports:
+      - "${SOURCE_HTTP_PORT:-8081}:80"
+      - "${SOURCE_SSH_PORT:-2221}:22"
+    volumes:
+      - ./data/source/customers:/data/customers
+      - ./ssh/authorized_keys:/tmp/authorized_keys:ro
+      - ./ssh/id_ed25519:/tmp/id_ed25519:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - source-net
+
+  target-froxlor:
+    build:
+      context: ./froxlor
+      dockerfile: Dockerfile
+    container_name: froxlor-target
+    restart: unless-stopped
+    depends_on:
+      - target-db
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      TZ: ${TZ:-UTC}
+      MYSQL_HOST: target-db
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: ${TARGET_DB_NAME:-froxlor}
+      MYSQL_USER: ${TARGET_DB_USER:-froxlor}
+      MYSQL_PASSWORD: ${TARGET_DB_PASSWORD:-froxlor}
+      MYSQL_ROOT_USER: ${TARGET_DB_ROOT_USER:-root}
+      MYSQL_ROOT_PASSWORD: ${TARGET_DB_ROOT_PASSWORD:-target-root}
+    ports:
+      - "${TARGET_HTTP_PORT:-8082}:80"
+      - "${TARGET_SSH_PORT:-2222}:22"
+    volumes:
+      - ./data/target/customers:/data/customers
+      - ./ssh/authorized_keys:/tmp/authorized_keys:ro
+    networks:
+      - target-net
+
+  bootstrap:
+    image: docker:27-cli
+    container_name: froxlor-bootstrap
+    profiles: ["bootstrap"]
+    working_dir: /workspace/testing
+    environment:
+      HOME: /tmp
+      DOCKER_CONFIG: /tmp/.docker
+      BOOTSTRAP_IN_DOCKER: "1"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ..:/workspace
+    command: >-
+      sh -lc "apk add --no-cache bash python3 py3-pip curl &&
+      curl -LsSf https://astral.sh/uv/install.sh | sh &&
+      export PATH=/tmp/.local/bin:$PATH &&
+      ./bootstrap/bootstrap_all.sh"
+
+networks:
+  source-net:
+  target-net:

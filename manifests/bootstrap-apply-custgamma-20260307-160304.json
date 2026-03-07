@@ -1,0 +1,50 @@
+[
+  {
+    "timestamp": "2026-03-07T16:03:04.048759+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.050512+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.051991+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.053283+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.054805+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.187510+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.472114+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /home/stefan/github/froxlor-migrator/testing/data/source/customers/custgamma/secure-demo.test/ . | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custgamma/secure-demo.test/ && tar -xf - -C /data/customers/custgamma/secure-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/secure-demo.test/'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:03:04.609676+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /home/stefan/github/froxlor-migrator/testing/data/source/customers/custgamma/redirect-demo.test/ . | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custgamma/redirect-demo.test/ && tar -xf - -C /data/customers/custgamma/redirect-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/redirect-demo.test/'",
+    "dry_run": false
+  }
+]

@@ -1,0 +1,46 @@
+[source]
+api_url = "http://127.0.0.1:8081/api.php"
+api_key = "${SOURCE_API_KEY}"
+api_secret = "${SOURCE_API_SECRET}"
+
+[target]
+api_url = "http://127.0.0.1:8082/api.php"
+api_key = "${TARGET_API_KEY}"
+api_secret = "${TARGET_API_SECRET}"
+
+[ssh]
+host = "127.0.0.1"
+user = "root"
+port = 2222
+strict_host_key_checking = false
+
+[paths]
+source_web_root = "/data/customers"
+source_transfer_root = "./testing/data/source/customers"
+target_web_root = "/data/customers"
+target_owner_user = "www-data"
+target_owner_group = "www-data"
+
+[mysql]
+source_dump_args = ["-h127.0.0.1", "-P33061", "-uroot", "-psource-root"]
+target_import_args = ["-htarget-db", "-P3306", "-uroot", "-ptarget-root"]
+source_panel_database = "froxlor"
+target_panel_database = "froxlor"
+
+[commands]
+ssh = "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes"
+sudo = "sudo"
+tar = "tar"
+mysqldump = "mysqldump"
+mysql = "mysql"
+doveadm = "doveadm"
+
+[behavior]
+dry_run_default = true
+domain_exists = "update"
+database_exists = "skip"
+mailbox_exists = "skip"
+parallel = 1
+
+[output]
+manifest_dir = "./manifests"

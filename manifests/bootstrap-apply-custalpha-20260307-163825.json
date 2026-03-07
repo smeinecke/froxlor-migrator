@@ -1,0 +1,44 @@
+[
+  {
+    "timestamp": "2026-03-07T16:38:25.543452+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:25.545187+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:25.546847+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:25.548345+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:25.549759+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:25.682851+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:26.081358+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_settings SET value='\"'\"'\"'\"'\"'\"'\"'\"'DBNAME'\"'\"'\"'\"'\"'\"'\"'\"' WHERE settinggroup='\"'\"'\"'\"'\"'\"'\"'\"'customer'\"'\"'\"'\"'\"'\"'\"'\"' AND varname='\"'\"'\"'\"'\"'\"'\"'\"'mysqlprefix'\"'\"'\"'\"'\"'\"'\"'\"';'\"'\"''",
+    "dry_run": false
+  }
+]

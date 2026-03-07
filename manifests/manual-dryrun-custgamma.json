@@ -1,0 +1,86 @@
+[
+  {
+    "timestamp": "2026-03-07T14:08:55.315178+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315569+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315644+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315717+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315786+00:00",
+    "kind": "command",
+    "command": "sudo doveadm user '*' >/dev/null 2>&1",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315866+00:00",
+    "kind": "command",
+    "command": "ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host command -v tar",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.315939+00:00",
+    "kind": "command",
+    "command": "ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host command -v mysql",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.316015+00:00",
+    "kind": "command",
+    "command": "ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host sudo doveadm user '*' >/dev/null 2>&1",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.365700+00:00",
+    "kind": "command",
+    "command": "ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'mysql  froxlor -e '\"'\"'UPDATE panel_domains SET dkim=1, dkim_pubkey=CONVERT(0x763d444b494d313b206b3d7273613b20703d4d494942496a414e42676b71686b6947397730424151454641414f43415138414d49494243674b434151454174657374536565646564446b696d5075626c69634b657930303031 USING utf8mb4), dkim_privkey=CONVERT(0x2d2d2d2d2d424547494e2050524956415445204b45592d2d2d2d2d5c6e7365656465642d646b696d2d707269766174652d6b65792d666f722d626f6f7473747261702d74657374735c6e2d2d2d2d2d454e442050524956415445204b45592d2d2d2d2d USING utf8mb4) WHERE domain=CONVERT(0x7365637572652d64656d6f2e74657374 USING utf8mb4);'\"'\"''",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.567226+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /var/customers/webs/custgamma/ . | ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'mkdir -p /data/customers/custgamma/var/customers/webs/custgamma/ && tar -xf - -C /data/customers/custgamma/var/customers/webs/custgamma/ && sudo chown -R www-data:www-data /data/customers/custgamma/var/customers/webs/custgamma/'",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.567542+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /data/customers/custgamma/secure-demo.test/ . | ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'mkdir -p /data/customers/custgamma/secure-demo.test/ && tar -xf - -C /data/customers/custgamma/secure-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/secure-demo.test/'",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.567765+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C /data/customers/custgamma/redirect-demo.test/ . | ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'mkdir -p /data/customers/custgamma/redirect-demo.test/ && tar -xf - -C /data/customers/custgamma/redirect-demo.test/ && sudo chown -R www-data:www-data /data/customers/custgamma/redirect-demo.test/'",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.567911+00:00",
+    "kind": "command",
+    "command": "sudo doveadm backup -u alerts@secure-demo.test ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'sudo doveadm dsync-server -u alerts@secure-demo.test'",
+    "dry_run": true
+  },
+  {
+    "timestamp": "2026-03-07T14:08:55.568023+00:00",
+    "kind": "command",
+    "command": "sudo doveadm backup -u ops@secure-demo.test ssh -o StrictHostKeyChecking=no -p 22 -l root dummy-host 'sudo doveadm dsync-server -u ops@secure-demo.test'",
+    "dry_run": true
+  }
+]

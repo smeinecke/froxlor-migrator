@@ -1,0 +1,68 @@
+[
+  {
+    "timestamp": "2026-03-07T16:38:48.924492+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:48.926668+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:48.928125+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:48.929486+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:48.930910+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:49.065565+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:49.459783+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_settings SET value='\"'\"'\"'\"'\"'\"'\"'\"'DBNAME'\"'\"'\"'\"'\"'\"'\"'\"' WHERE settinggroup='\"'\"'\"'\"'\"'\"'\"'\"'customer'\"'\"'\"'\"'\"'\"'\"'\"' AND varname='\"'\"'\"'\"'\"'\"'\"'\"'mysqlprefix'\"'\"'\"'\"'\"'\"'\"'\"';'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:49.649203+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_wpdemo | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_wpdemo'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:49.836500+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_analytics | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_analytics'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:50.009415+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root mysql -e '\"'\"'UPDATE mysql.user SET plugin=CONVERT(0x6d7973716c5f6e61746976655f70617373776f7264 USING utf8mb4), authentication_string=CONVERT(0x2a41343839354344433430333837303030314634374442333244323037453643384238324137384633 USING utf8mb4) WHERE User=CONVERT(0x63757374616c7068615f777064656d6f USING utf8mb4); UPDATE mysql.user SET plugin=CONVERT(0x6d7973716c5f6e61746976655f70617373776f7264 USING utf8mb4), authentication_string=CONVERT(0x2a33453436424341394436304235314135453031433834353046394439454236343033314634373142 USING utf8mb4) WHERE User=CONVERT(0x63757374616c7068615f616e616c7974696373 USING utf8mb4); FLUSH PRIVILEGES;'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T16:38:50.170265+00:00",
+    "kind": "error",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root mysql -e '\"'\"'UPDATE mysql.user SET plugin=CONVERT(0x6d7973716c5f6e61746976655f70617373776f7264 USING utf8mb4), authentication_string=CONVERT(0x2a41343839354344433430333837303030314634374442333244323037453643384238324137384633 USING utf8mb4) WHERE User=CONVERT(0x63757374616c7068615f777064656d6f USING utf8mb4); UPDATE mysql.user SET plugin=CONVERT(0x6d7973716c5f6e61746976655f70617373776f7264 USING utf8mb4), authentication_string=CONVERT(0x2a33453436424341394436304235314135453031433834353046394439454236343033314634373142 USING utf8mb4) WHERE User=CONVERT(0x63757374616c7068615f616e616c7974696373 USING utf8mb4); FLUSH PRIVILEGES;'\"'\"''",
+    "returncode": 1
+  }
+]

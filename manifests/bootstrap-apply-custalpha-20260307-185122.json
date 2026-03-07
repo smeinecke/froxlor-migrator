@@ -1,0 +1,56 @@
+[
+  {
+    "timestamp": "2026-03-07T18:51:23.025089+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.026727+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.028234+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.029479+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.030725+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.164427+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.555068+00:00",
+    "kind": "command",
+    "command": "ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root froxlor -e '\"'\"'UPDATE panel_settings SET value='\"'\"'\"'\"'\"'\"'\"'\"'DBNAME'\"'\"'\"'\"'\"'\"'\"'\"' WHERE settinggroup='\"'\"'\"'\"'\"'\"'\"'\"'customer'\"'\"'\"'\"'\"'\"'\"'\"' AND varname='\"'\"'\"'\"'\"'\"'\"'\"'mysqlprefix'\"'\"'\"'\"'\"'\"'\"'\"';'\"'\"''",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.724968+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_wpdemo | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_wpdemo'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T18:51:23.892935+00:00",
+    "kind": "error",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_wpdemo | ssh -i /home/stefan/github/froxlor-migrator/testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalpha_wpdemo'",
+    "returncode": 2
+  }
+]

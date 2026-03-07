@@ -1,0 +1,62 @@
+[
+  {
+    "timestamp": "2026-03-07T15:30:50.614129+00:00",
+    "kind": "command",
+    "command": "command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:50.615869+00:00",
+    "kind": "command",
+    "command": "command -v mysqldump",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:50.617355+00:00",
+    "kind": "command",
+    "command": "command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:50.618825+00:00",
+    "kind": "command",
+    "command": "command -v ssh",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:50.620132+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v tar",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:50.801940+00:00",
+    "kind": "command",
+    "command": "ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 command -v mysql",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:51.088033+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_wpdemo | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalphasql2'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:51.325652+00:00",
+    "kind": "command",
+    "command": "mysqldump -h127.0.0.1 -P33061 -uroot -psource-root custalpha_analytics | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mysql -htarget-db -P3306 -uroot -ptarget-root custalphasql3'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:51.534191+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C ./testing/data/source/customers/custalpha/wp-demo.test/ . | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custalpha/wp-demo.test/ && tar -xf - -C /data/customers/custalpha/wp-demo.test/ && sudo chown -R www-data:www-data /data/customers/custalpha/wp-demo.test/'",
+    "dry_run": false
+  },
+  {
+    "timestamp": "2026-03-07T15:30:52.172067+00:00",
+    "kind": "command",
+    "command": "tar -cf - -C ./testing/data/source/customers/custalpha/static-demo.test/ . | ssh -i ./testing/ssh/id_ed25519 -o IdentitiesOnly=yes -o StrictHostKeyChecking=no -p 2222 -l root 127.0.0.1 'mkdir -p /data/customers/custalpha/static-demo.test/ && tar -xf - -C /data/customers/custalpha/static-demo.test/ && sudo chown -R www-data:www-data /data/customers/custalpha/static-demo.test/'",
+    "dry_run": false
+  }
+]

@@ -1,0 +1,51 @@
+[source]
+api_url = "https://old.example.com/api.php"
+api_key = "${FROXLOR_SOURCE_API_KEY}"
+api_secret = "${FROXLOR_SOURCE_API_SECRET}"
+
+[target]
+api_url = "https://new.example.com/api.php"
+api_key = "${FROXLOR_TARGET_API_KEY}"
+api_secret = "${FROXLOR_TARGET_API_SECRET}"
+
+[ssh]
+host = "new.example.com"
+user = "root"
+port = 22
+strict_host_key_checking = true
+
+[paths]
+source_web_root = "/var/customers/webs"
+# Optional local transfer path if migrator host sees source files elsewhere
+source_transfer_root = "/var/customers/webs"
+target_web_root = "/var/customers/webs"
+target_owner_user = "www-data"
+target_owner_group = "www-data"
+
+[mysql]
+# Optional extra args, e.g. ["--defaults-extra-file=/root/.my.cnf"]
+source_dump_args = []
+# Optional remote args, e.g. ["--defaults-extra-file=/root/.my.cnf"]
+target_import_args = []
+source_panel_database = "froxlor"
+target_panel_database = "froxlor"
+
+[commands]
+ssh = "ssh"
+sudo = "sudo"
+tar = "tar"
+mysqldump = "mysqldump"
+mysql = "mysql"
+doveadm = "doveadm"
+pzstd = "pzstd"
+pigz = "pigz"
+
+[behavior]
+dry_run_default = true
+domain_exists = "fail"
+database_exists = "fail"
+mailbox_exists = "skip"
+parallel = 1
+
+[output]
+manifest_dir = "./manifests"
