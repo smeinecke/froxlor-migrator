@@ -12,3 +12,5 @@ testing/data/
 testing/.venv-bootstrap/
 
 /config.toml
+/coverage.xml
+/.coverage
