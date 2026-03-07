@@ -5,6 +5,8 @@ __pycache__/
 .pyright/
 .pytest_cache
 
+manifests/
+
 testing/.env
 testing/data/
 testing/.venv-bootstrap/

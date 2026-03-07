@@ -53,13 +53,13 @@ Froxlor UIs:
 Run unattended setup for both source/target instances:
 
 ```bash
-./bootstrap/install_wizard.sh
+docker compose run --rm --profile bootstrap bootstrap install_wizard
 ```
 
-To automate everything from host in one shot:
+To automate everything in one shot:
 
 ```bash
-./bootstrap/bootstrap_all.sh
+docker compose run --rm --profile bootstrap bootstrap
 ```
 
 This bootstrap also generates `testing/ssh/id_ed25519` and installs the public key into both Froxlor containers for root SSH login (key-only auth).
@@ -84,7 +84,13 @@ For running the migrator source->target, you also need a target API key in your 
 
 ```bash
 cd testing
-./bootstrap/seed_source.sh
+docker compose run --rm --profile bootstrap bootstrap
+```
+
+Or run individual steps (still within Docker bootstrap container):
+
+```bash
+docker compose run --rm --profile bootstrap bootstrap seed_source
 ```
 
 This creates the test customers/domains/mail objects (including SSL/cert/domain settings and mailbox spam settings) and writes web content under `testing/data/source/customers`.
@@ -93,7 +99,7 @@ This creates the test customers/domains/mail objects (including SSL/cert/domain 
 
 ```bash
 cd testing
-./bootstrap/verify_seed.sh
+docker compose run --rm --profile bootstrap bootstrap verify_seed
 ```
 
 `bootstrap_all.sh` runs this verification automatically after seeding.
@@ -102,7 +108,7 @@ cd testing
 
 ```bash
 cd testing
-./bootstrap/migrate_and_verify.sh
+docker compose run --rm --profile bootstrap bootstrap migrate_and_verify
 ```
 
 This performs a real apply migration (files + databases + mailbox content via doveadm) for seeded test customers and then verifies source/target parity. It also injects a probe email into source mailbox `alerts@secure-demo.test` and asserts that the exact probe reaches target after migration. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
@@ -122,5 +128,5 @@ For local host-run tests, use SSH target `127.0.0.1` and `TARGET_SSH_PORT` with 
 
 - Mailbox object creation is seeded via Froxlor API.
 - The test Froxlor image includes postfix+dovecot and starts both daemons, so `doveadm backup` is exercised with real mailbox payloads.
-- `seed_source.sh` uses `uv` (`uv run --with requests ...`), so install uv on your host first.
-- `install_wizard.sh` also uses `uv` and reads values from `testing/.env`.
+- All bootstrap scripts use `uv` which is automatically installed in the Docker bootstrap container.
+- The Docker bootstrap container handles all Python dependencies and uv installation automatically.
