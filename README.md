@@ -16,13 +16,13 @@ What it does:
 - Enforces identical source->target database names for migrated databases to preserve matching DB login names
 - Runs on the source (old) server
 - Transfers payload data over SSH to target:
-  - files via `tar -cf - | pzstd -3 | ssh ... pzstd -d | tar -xf -` (uses pigz as fallback)
+  - files via `tar -cf - --preserve-permissions --preserve-owner | pzstd -3 | ssh ... pzstd -d | tar -xf --preserve-permissions --preserve-owner` (uses pigz as fallback)
   - SQL via `mysqldump | ssh ... mysql`
   - mail via `sudo doveadm backup ... ssh ... sudo doveadm dsync-server ...`
 - Databases are listed separately and selected manually
 - Supports full-customer mode (all domains, files, databases, mailboxes, settings)
 - Supports interactive source->target IP/port mapping for domains; if no mapping is provided, target Froxlor defaults are used
-- After file copy, resets ownership on target web content (`paths.target_owner_user:paths.target_owner_group`)
+- Preserves original file ownership and permissions during transfer (relies on Froxlor creating matching users on target)
 - Supports separate source panel docroot and local transfer path (`paths.source_web_root` vs `paths.source_transfer_root`)
 
 ## Install (uv)
@@ -75,6 +75,21 @@ source_transfer_root = "./testing/data/source/customers"  # local path used for 
 target_web_root = "/data/customers"
 ```
 
+## Docker Testing
+
+For local testing with Docker containers, see the `testing/README.md` for detailed setup instructions:
+
+```bash
+cd testing
+cp .env.example .env
+docker compose --profile bootstrap run --rm bootstrap
+```
+
+This provides:
+- Source and target Froxlor instances with MariaDB
+- Automated bootstrap with test data
+- Full migration testing environment
+
 ## Notes
 
 - Default behavior is conservative:
@@ -88,3 +103,5 @@ target_web_root = "/data/customers"
 - Domain-zone migration intentionally skips system/default records and only syncs custom records.
 - A migration manifest JSON is written to `output.manifest_dir`.
 - For mail migration, `sudo doveadm` must work on both source and target.
+- File ownership and permissions are preserved during transfer using tar's `--preserve-permissions --preserve-owner` flags.
+- The migrator relies on Froxlor creating matching user accounts on the target system for proper ownership mapping.

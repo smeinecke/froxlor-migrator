@@ -50,8 +50,6 @@ class PathsConfig:
     source_web_root: str
     source_transfer_root: str
     target_web_root: str
-    target_owner_user: str = "www-data"
-    target_owner_group: str = "www-data"
 
 
 @dataclass(frozen=True)
@@ -135,8 +133,6 @@ def load_config(path: str | Path) -> AppConfig:
         source_web_root=_must(paths, "source_web_root"),
         source_transfer_root=str(paths.get("source_transfer_root", _must(paths, "source_web_root"))),
         target_web_root=_must(paths, "target_web_root"),
-        target_owner_user=str(paths.get("target_owner_user", "www-data")),
-        target_owner_group=str(paths.get("target_owner_group", "www-data")),
     )
     mysql_cfg = MysqlConfig(
         source_dump_args=list(mysql.get("source_dump_args", [])),

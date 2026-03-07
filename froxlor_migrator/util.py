@@ -50,6 +50,8 @@ def slugify(value: str) -> str:
 
 def parse_multi_select(raw: str, max_index: int) -> list[int]:
     raw = raw.strip().lower()
+    if raw in {"none", "empty", ""}:
+        return []
     if raw in {"all", "*"}:
         return list(range(max_index))
     chosen: set[int] = set()

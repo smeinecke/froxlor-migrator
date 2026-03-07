@@ -19,8 +19,6 @@ source_web_root = "/var/customers/webs"
 # Optional local transfer path if migrator host sees source files elsewhere
 source_transfer_root = "/var/customers/webs"
 target_web_root = "/var/customers/webs"
-target_owner_user = "www-data"
-target_owner_group = "www-data"
 
 [mysql]
 # Optional extra args, e.g. ["--defaults-extra-file=/root/.my.cnf"]

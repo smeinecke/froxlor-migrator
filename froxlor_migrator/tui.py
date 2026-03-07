@@ -29,14 +29,17 @@ def _render_table(title: str, rows: list[dict], cols: list[tuple[str, str]]) -> 
     console.print(table)
 
 
-def _choose_rows(title: str, rows: list[dict], cols: list[tuple[str, str]], multi: bool = False) -> list[dict]:
+def _choose_rows(title: str, rows: list[dict], cols: list[tuple[str, str]], multi: bool = False, allow_empty: bool = False) -> list[dict]:
     if not rows:
         return []
     _render_table(title, rows, cols)
 
     if multi:
         while True:
-            raw = Prompt.ask("Select entries (e.g. 1,2,5-7 or all)", default="all")
+            default = "none" if allow_empty else "all"
+            raw = Prompt.ask(f"Select entries (e.g. 1,2,5-7, {default})", default=default)
+            if allow_empty and raw == "none":
+                return []
             try:
                 indices = parse_multi_select(raw, len(rows))
                 return [rows[i] for i in indices]
@@ -349,13 +352,18 @@ def run_app() -> None:
         selected_ssh_keys = ssh_keys
         selected_data_dumps = data_dumps
     else:
-        selected_db_rows = _choose_rows(
-            "Customer databases (separate selection)",
-            _db_view(dbs),
-            cols=[("dbname", "DB Name"), ("description", "Description"), ("server", "Server")],
-            multi=True,
-        )
-        selected_databases = [x["_raw"] for x in selected_db_rows]
+        if dbs:
+            selected_db_rows = _choose_rows(
+                "Customer databases (separate selection, optional - press Enter for none)",
+                _db_view(dbs),
+                cols=[("dbname", "DB Name"), ("description", "Description"), ("server", "Server")],
+                multi=True,
+                allow_empty=True,
+            )
+            selected_databases = [x["_raw"] for x in selected_db_rows]
+        else:
+            selected_databases = []
+            console.print("[yellow]No databases found for this customer.[/yellow]")
 
         selected_mail_rows = _choose_rows(
             "Mailboxes for selected domains",
@@ -371,13 +379,18 @@ def run_app() -> None:
             multi=True,
         )
         selected_subdomains = [x["_raw"] for x in selected_subdomain_rows]
-        selected_ftp_rows = _choose_rows(
-            "FTP accounts",
-            _ftp_view(ftps),
-            cols=[("username", "Username"), ("path", "Path"), ("login", "Login")],
-            multi=True,
-        )
-        selected_ftps = [x["_raw"] for x in selected_ftp_rows]
+        if ftps:
+            selected_ftp_rows = _choose_rows(
+                "FTP accounts (optional - press Enter for none)",
+                _ftp_view(ftps),
+                cols=[("username", "Username"), ("path", "Path"), ("login", "Login")],
+                multi=True,
+                allow_empty=True,
+            )
+            selected_ftps = [x["_raw"] for x in selected_ftp_rows]
+        else:
+            selected_ftps = []
+            console.print("[yellow]No FTP accounts found for this customer.[/yellow]")
         selected_dir_protections = dir_protections
         selected_dir_options = dir_options
         selected_ssh_keys = ssh_keys

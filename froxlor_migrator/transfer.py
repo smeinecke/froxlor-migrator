@@ -126,19 +126,19 @@ class TransferRunner:
     def transfer_files(self, source_dir: str, target_dir: str) -> None:
         tar = shlex.quote(self.config.commands.tar)
         ssh_prefix = self._ssh_prefix()
-        sudo = shlex.quote(self.config.commands.sudo)
-        owner = f"{self.config.paths.target_owner_user}:{self.config.paths.target_owner_group}"
 
         # Get compression commands
         compress_cmd, decompress_cmd = self._get_compression_command()
 
         remote_cmd = (
             f"mkdir -p {shlex.quote(target_dir)}"
-            f" && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
-            f" && {sudo} chown -R {shlex.quote(owner)} {shlex.quote(target_dir)}"
+            f" && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)} --preserve-permissions --preserve-owner"
         )
 
-        command = f"{tar} -cf - -C {shlex.quote(source_dir)} . | {compress_cmd} | {ssh_prefix} '{decompress_cmd} | {shlex.quote(remote_cmd)}'"
+        command = (
+            f"{tar} -cf - -C {shlex.quote(source_dir)} . --preserve-permissions --preserve-owner"
+            f" | {compress_cmd} | {ssh_prefix} '{decompress_cmd} | {shlex.quote(remote_cmd)}'"
+        )
         self.run(command)
 
     def transfer_database(self, source_db: str, target_db: str) -> None:

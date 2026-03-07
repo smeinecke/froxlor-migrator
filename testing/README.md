@@ -40,7 +40,7 @@ docker compose up -d
 Or run full automation through a compose bootstrap profile (installs containers, runs CLI wizard, creates API keys, seeds data, verifies fixtures):
 
 ```bash
-docker compose run --rm --profile bootstrap bootstrap
+docker compose --profile bootstrap run --rm bootstrap
 ```
 
 Froxlor UIs:
