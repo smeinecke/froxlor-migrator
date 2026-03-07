@@ -10,6 +10,7 @@ import string
 import subprocess
 import tarfile
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 from urllib.request import urlretrieve
@@ -54,24 +55,46 @@ class FroxlorApi:
         if params:
             body["params"] = params
 
-        response = requests.post(
-            self.api_url,
-            headers={
-                "Authorization": f"Basic {self._auth()}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=self.timeout,
-        )
-        if response.status_code >= 400:
-            raise ApiError(f"{command} failed with HTTP {response.status_code}: {response.text[:300]}")
-        try:
-            payload = response.json()
-        except JSONDecodeError as exc:
-            raise ApiError(f"{command} returned non-JSON response: {response.text[:300]}") from exc
-        if int(payload.get("status", 200)) >= 400:
-            raise ApiError(f"{command} failed: {payload.get('status_message', 'unknown error')}")
-        return payload.get("data")
+        last_error: ApiError | Exception | None = None
+        for attempt in range(1, 6):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers={
+                        "Authorization": f"Basic {self._auth()}",
+                        "Content-Type": "application/json",
+                    },
+                    json=body,
+                    timeout=self.timeout,
+                )
+            except requests.RequestException as exc:
+                last_error = exc
+                response = None
+            else:
+                if response.status_code < 500:
+                    if response.status_code >= 400:
+                        raise ApiError(
+                            f"{command} failed with HTTP {response.status_code}: {response.text[:300]}"
+                        )
+                    try:
+                        payload = response.json()
+                    except JSONDecodeError as exc:
+                        raise ApiError(f"{command} returned non-JSON response: {response.text[:300]}") from exc
+                    if int(payload.get("status", 200)) >= 400:
+                        raise ApiError(f"{command} failed: {payload.get('status_message', 'unknown error')}")
+                    return payload.get("data")
+                last_error = ApiError(
+                    f"{command} failed with HTTP {response.status_code}: {response.text[:300]}"
+                )
+
+            if attempt < 5:
+                time.sleep(min(5, attempt))
+
+        if isinstance(last_error, ApiError):
+            raise last_error
+        if last_error is not None:
+            raise ApiError(f"{command} failed after retries: {last_error}")
+        raise ApiError(f"{command} failed after retries with no response")
 
     def listing(self, command: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         merged = dict(params or {})

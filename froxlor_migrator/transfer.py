@@ -78,10 +78,29 @@ class TransferRunner:
         sudo = shlex.quote(self.config.commands.sudo)
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_binary = shlex.quote(shlex.split(self.config.commands.ssh)[0])
-        pzstd = shlex.quote(self.config.commands.pzstd)
-        pigz = shlex.quote(self.config.commands.pigz)
         commands = [f"command -v {shlex.quote(self.config.commands.tar)}"]
-        commands.extend([f"command -v {pzstd}", f"command -v {pigz}"])
+
+        # Check for available compression tools (optional)
+        compression_commands = []
+        try:
+            pzstd = shlex.quote(self.config.commands.pzstd)
+            result = subprocess.run(["bash", "-c", f"command -v {pzstd}"], capture_output=True, text=True)
+            if result.returncode == 0:
+                compression_commands.append(f"command -v {pzstd}")
+        except Exception:
+            pass
+
+        try:
+            pigz = shlex.quote(self.config.commands.pigz)
+            result = subprocess.run(["bash", "-c", f"command -v {pigz}"], capture_output=True, text=True)
+            if result.returncode == 0:
+                compression_commands.append(f"command -v {pigz}")
+        except Exception:
+            pass
+
+        # Only add compression commands if they're available
+        commands.extend(compression_commands)
+
         if include_database_tools:
             commands.append(f"command -v {shlex.quote(self.config.commands.mysqldump)}")
             commands.append(f"command -v {shlex.quote(self.config.commands.mysql)}")
@@ -89,7 +108,9 @@ class TransferRunner:
             commands.append(f"command -v {ssh_binary}")
             ssh_prefix = self._ssh_prefix()
             commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.tar)}")
-            commands.extend([f"{ssh_prefix} command -v {pzstd}", f"{ssh_prefix} command -v {pigz}"])
+            # Only add compression commands for SSH if they're available locally
+            for cmd in compression_commands:
+                commands.append(f"{ssh_prefix} {cmd}")
             if include_database_tools:
                 commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.mysql)}")
         if include_mail_tools:
@@ -102,7 +123,7 @@ class TransferRunner:
     def _get_compression_command(self) -> tuple[str, str]:
         """Get compression command and decompression command.
         Returns (compress_cmd, decompress_cmd) tuple.
-        Prefers pzstd with -3 level, falls back to pigz.
+        Prefers pzstd with -3 level, falls back to pigz, then no compression.
         """
         pzstd = shlex.quote(self.config.commands.pzstd)
         pigz = shlex.quote(self.config.commands.pigz)
@@ -119,8 +140,18 @@ class TransferRunner:
             pass
 
         # Fall back to pigz
-        compress_cmd = f"{pigz}"
-        decompress_cmd = f"{pigz} -d"
+        try:
+            result = subprocess.run(["bash", "-c", f"command -v {pigz}"], capture_output=True, text=True)
+            if result.returncode == 0:
+                compress_cmd = f"{pigz}"
+                decompress_cmd = f"{pigz} -d"
+                return compress_cmd, decompress_cmd
+        except Exception:
+            pass
+
+        # No compression available - use cat as no-op
+        compress_cmd = "cat"
+        decompress_cmd = "cat"
         return compress_cmd, decompress_cmd
 
     def transfer_files(self, source_dir: str, target_dir: str) -> None:

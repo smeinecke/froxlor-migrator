@@ -19,8 +19,12 @@ mkdir -p "$ROOT_DIR/ssh"
 if [[ ! -f "$ROOT_DIR/ssh/id_ed25519" ]]; then
 	ssh-keygen -q -t ed25519 -N "" -f "$ROOT_DIR/ssh/id_ed25519"
 fi
+if [[ -d "$ROOT_DIR/ssh/authorized_keys" ]]; then
+	rm -rf "$ROOT_DIR/ssh/authorized_keys"
+fi
 cp "$ROOT_DIR/ssh/id_ed25519.pub" "$ROOT_DIR/ssh/authorized_keys"
-chmod 600 "$ROOT_DIR/ssh/id_ed25519" "$ROOT_DIR/ssh/authorized_keys"
+chmod 600 "$ROOT_DIR/ssh/id_ed25519"
+chmod 600 "$ROOT_DIR/ssh/authorized_keys"
 chmod 644 "$ROOT_DIR/ssh/id_ed25519.pub"
 
 docker compose down -v --remove-orphans
@@ -71,6 +75,11 @@ wait_api() {
 	echo "API endpoint not ready: $url" >&2
 	exit 1
 }
+
+if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
+	SOURCE_API_URL="${SOURCE_API_URL/127.0.0.1/host.docker.internal}"
+	TARGET_API_URL="${TARGET_API_URL/127.0.0.1/host.docker.internal}"
+fi
 
 refresh_froxlor_runtime source-froxlor
 refresh_froxlor_runtime target-froxlor

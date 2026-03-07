@@ -20,6 +20,7 @@ class MigrationError(RuntimeError):
 @dataclass
 class Selection:
     customer: dict[str, Any]
+    target_customer: dict[str, Any] | None
     domains: list[dict[str, Any]]
     subdomains: list[dict[str, Any]]
     databases: list[dict[str, Any]]
@@ -77,12 +78,24 @@ class Migrator:
     def _find_target_customer(self, source_customer: dict[str, Any]) -> dict[str, Any] | None:
         source_login = str(pick(source_customer, "loginname", "login", default=""))
         source_email = str(pick(source_customer, "email", default="")).strip().lower()
+
+        # Debug: Print target server info
+        if hasattr(self.target, 'api_url'):
+            print(f"DEBUG: Searching for customer on target server: {self.target.api_url}")
+        print(f"DEBUG: Looking for source_login={source_login}, source_email={source_email}")
+
         for customer in self.target.list_customers():
-            if source_login and str(pick(customer, "loginname", "login", default="")) == source_login:
-                return customer
+            customer_login = str(pick(customer, "loginname", "login", default=""))
             customer_email = str(pick(customer, "email", default="")).strip().lower()
-            if source_email and customer_email and source_email == customer_email:
+
+            if source_login and customer_login == source_login:
+                print(f"DEBUG: Found existing customer by login: {customer_login}")
                 return customer
+            if source_email and customer_email and source_email == customer_email:
+                print(f"DEBUG: Found existing customer by email: {customer_email}")
+                return customer
+
+        print(f"DEBUG: No existing customer found for login={source_login}, email={source_email}")
         return None
 
     def _customer_payload(self, source_customer: dict[str, Any]) -> dict[str, Any]:
@@ -161,7 +174,14 @@ class Migrator:
             "data_2fa": str(pick(source_customer, "data_2fa", default="")),
         }
 
-    def _ensure_target_customer(self, source_customer: dict[str, Any]) -> int:
+    def _ensure_target_customer(self, source_customer: dict[str, Any], target_customer: dict[str, Any] | None = None) -> int:
+        # If we already have a target customer (domain-only migration), use it
+        if target_customer:
+            customer_id = as_int(pick(target_customer, "customerid", "id", default=0))
+            if not customer_id:
+                raise MigrationError("Could not resolve pre-selected target customer id")
+            return customer_id
+
         existing = self._find_target_customer(source_customer)
         payload = self._customer_payload(source_customer)
         if existing:
@@ -1424,8 +1444,14 @@ class Migrator:
     def execute(self, selection: Selection) -> MigrationContext:
         self.preflight(selection)
 
-        target_customer_id = self._ensure_target_customer(selection.customer)
+        target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer)
         customer_login = str(pick(selection.customer, "loginname", "login", default="")).strip()
+
+        # Check if username changed between source and target for permission fixing
+        target_customer_login = None
+        if selection.target_customer:
+            target_customer_login = str(pick(selection.target_customer, "loginname", "login", default="")).strip()
+
         self._ensure_domains(
             target_customer_id,
             selection.domains,
@@ -1478,6 +1504,15 @@ class Migrator:
                 source_docroot = self._resolve_source_docroot(domain, customer_login)
                 target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
                 self.runner.transfer_files(source_docroot, target_docroot)
+
+                # Fix permissions if username changed
+                if target_customer_login and target_customer_login != customer_login:
+                    if not self.runner.dry_run:
+                        chown_cmd = (
+                            f"find {shlex.quote(target_docroot)} -user {shlex.quote(customer_login)} "
+                            f"-exec chown -h {shlex.quote(target_customer_login)} {{}} +"
+                        )
+                        self.runner.run(f"{self._ssh_prefix()} '{chown_cmd}'")
 
         if selection.include_mail and transferable_mailboxes:
             for mailbox in transferable_mailboxes:

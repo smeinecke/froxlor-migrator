@@ -30,3 +30,50 @@ jobs:
 
       - name: Compile check
         run: uv run python -m compileall .
+
+  integration-test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Sync dependencies
+        run: uv sync --no-dev
+        working-directory: testing
+
+      - name: Set up Docker
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create .env file
+        run: |
+          cp testing/.env.example testing/.env
+          echo "SOURCE_HTTP_PORT=8081" >> testing/.env
+          echo "TARGET_HTTP_PORT=8082" >> testing/.env
+          echo "SOURCE_SSH_PORT=2221" >> testing/.env
+          echo "TARGET_SSH_PORT=2222" >> testing/.env
+          echo "BOOTSTRAP_RUN_MIGRATION_VERIFY=1" >> testing/.env
+
+      - name: Run full integration test
+        run: |
+          docker compose --profile bootstrap run --rm bootstrap
+        working-directory: testing
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-test-logs
+          path: |
+            testing/data/
+            testing/docker-compose.log

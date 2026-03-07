@@ -5,11 +5,12 @@ __pycache__/
 .pyright/
 .pytest_cache
 
-manifests/
+/manifests/
 
-testing/.env
-testing/data/
-testing/.venv-bootstrap/
+/testing/.env
+/testing/data/
+/testing/.venv-bootstrap/
+/testing/ssh
 
 /config.toml
 /coverage.xml

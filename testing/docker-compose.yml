@@ -109,10 +109,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ..:/workspace
     command: >-
-      sh -lc "apk add --no-cache bash python3 py3-pip curl &&
+      sh -lc "apk add --no-cache bash python3 py3-pip curl openssl mariadb-client zstd tar &&
       curl -LsSf https://astral.sh/uv/install.sh | sh &&
       export PATH=/tmp/.local/bin:$PATH &&
-      ./bootstrap/bootstrap_all.sh"
+      uv sync --no-dev &&
+      uv run ./bootstrap/bootstrap_all.sh"
 
 networks:
   source-net:

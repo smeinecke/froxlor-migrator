@@ -17,10 +17,18 @@ set +a
 
 if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
 	SOURCE_API_URL="${SOURCE_API_URL/127.0.0.1/host.docker.internal}"
+	SOURCE_MYSQL_HOST="host.docker.internal"
+	SOURCE_MYSQL_PORT="${SOURCE_DB_PORT:-33061}"
 fi
 
+SOURCE_MYSQL_HOST="${SOURCE_MYSQL_HOST:-127.0.0.1}"
+SOURCE_MYSQL_PORT="${SOURCE_MYSQL_PORT:-${SOURCE_DB_PORT:-33061}}"
+
 cd "$ROOT_DIR"
-SOURCE_API_URL="$SOURCE_API_URL" uv run --no-project --with requests "$SCRIPT_DIR/verify_seed.py"
+SOURCE_API_URL="$SOURCE_API_URL" \
+	SOURCE_MYSQL_HOST="$SOURCE_MYSQL_HOST" \
+	SOURCE_MYSQL_PORT="$SOURCE_MYSQL_PORT" \
+	uv run --no-project --with requests "$SCRIPT_DIR/verify_seed.py"
 
 if [ $? -eq 0 ]; then
 	echo "Verification completed successfully!"

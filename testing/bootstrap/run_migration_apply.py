@@ -116,6 +116,7 @@ def _migrate_customer(config_path: str, customer_login: str, include_mail: bool)
 
     selection = Selection(
         customer=customer,
+        target_customer=None,
         domains=selected_domains,
         subdomains=selected_subdomains,
         databases=databases,

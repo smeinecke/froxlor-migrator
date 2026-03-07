@@ -319,6 +319,34 @@ def run_app() -> None:
         default=True,
     )
 
+    # For domain-only migration, let user select target customer
+    target_customer = None
+    if not migrate_whole_customer:
+        try:
+            target_customers = target.list_customers()
+            target_customer_rows = _customer_view(target_customers)
+
+            # Add "Create new customer" option
+            new_customer_option = {"id": 0, "login": "new", "name": "(Create new customer)", "email": "", "_raw": None}
+            all_options = [new_customer_option] + target_customer_rows
+
+            selected_target_row = _choose_rows(
+                "Target customers",
+                all_options,
+                cols=[("id", "ID"), ("login", "Login"), ("name", "Name"), ("email", "Email")],
+                multi=False,
+            )
+
+            if selected_target_row:
+                if selected_target_row[0]["_raw"] is None:
+                    console.print("[yellow]New customer will be created from source customer data.[/yellow]")
+                else:
+                    target_customer = selected_target_row[0]["_raw"]
+                    console.print(f"[green]Using existing target customer: {pick(target_customer, 'loginname', 'login', default='unknown')}[/green]")
+        except FroxlorApiError as exc:
+            console.print(f"[red]API error while listing target customers:[/red] {exc}")
+            return
+
     if migrate_whole_customer:
         selected_domains = [d for d in domains if _domain_in_source_root(d, config.paths.source_web_root)]
         skipped = len(domains) - len(selected_domains)
@@ -454,6 +482,7 @@ def run_app() -> None:
 
     selection = Selection(
         customer=selected_customer,
+        target_customer=target_customer,
         domains=selected_domains,
         subdomains=selected_subdomains,
         databases=selected_databases,
