@@ -413,8 +413,25 @@ class Migrator:
         )
         self._exec_target_panel_sql(update_sql)
 
-    def _ensure_target_mysql_prefix_dbname(self) -> None:
-        sql = "UPDATE panel_settings SET value='DBNAME' WHERE settinggroup='customer' AND varname='mysqlprefix';"
+    def _source_mysql_prefix_setting(self) -> str:
+        rows = self._run_source_panel_query(
+            "SELECT value FROM panel_settings "
+            "WHERE settinggroup='customer' AND varname='mysqlprefix' "
+            "LIMIT 1;"
+        )
+        if not rows or not rows[0]:
+            return ""
+        return str(rows[0][0]).strip()
+
+    def _sync_target_mysql_prefix_setting(self) -> None:
+        value = self._source_mysql_prefix_setting()
+        if not value:
+            return
+        sql = (
+            "UPDATE panel_settings "
+            f"SET value={self._sql_utf8_literal(value)} "
+            "WHERE settinggroup='customer' AND varname='mysqlprefix';"
+        )
         self._exec_target_panel_sql(sql)
 
     def _load_source_domain_redirects(self, domains: list[dict[str, Any]]) -> list[tuple[str, str, int]]:
@@ -1733,7 +1750,7 @@ class Migrator:
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:
-            self._ensure_target_mysql_prefix_dbname()
+            self._sync_target_mysql_prefix_setting()
             known_before = self._target_database_set()
             for source_db in selection.databases:
                 source_name = self._database_name(source_db)

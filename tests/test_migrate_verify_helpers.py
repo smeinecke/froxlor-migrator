@@ -193,5 +193,22 @@ class DryRunAndNormalizeTests(unittest.TestCase):
         self.assertEqual(1, migrator.target.test_calls)
 
 
+class MysqlPrefixSyncTests(unittest.TestCase):
+    def test_source_mysql_prefix_setting_reads_panel_setting(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator._run_source_panel_query = lambda sql: [["NONE"]]  # type: ignore[method-assign]
+        self.assertEqual("NONE", migrator._source_mysql_prefix_setting())
+
+    def test_sync_target_mysql_prefix_setting_updates_target(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator._run_source_panel_query = lambda sql: [["DBNAME"]]  # type: ignore[method-assign]
+        calls: list[str] = []
+        migrator._exec_target_panel_sql = lambda sql: calls.append(sql)  # type: ignore[method-assign]
+        migrator._sync_target_mysql_prefix_setting()
+        self.assertEqual(1, len(calls))
+        self.assertIn("varname='mysqlprefix'", calls[0])
+        self.assertIn("DBNAME", calls[0])
+
+
 if __name__ == "__main__":
     unittest.main()
