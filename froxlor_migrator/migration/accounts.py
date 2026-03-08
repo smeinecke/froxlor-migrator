@@ -219,24 +219,6 @@ class MigratorAccountOps:
                 raise
             existing.add(key)
 
-    def _relative_customer_path(self, path: str, customer_login: str) -> str:
-        cleaned = path.strip().strip("/")
-        if not cleaned:
-            return ""
-        marker = f"/{customer_login.strip('/')}/"
-        lowered = cleaned.lower()
-        if marker.lower() in f"/{lowered}/":
-            original = cleaned
-            while marker in f"/{original}/":
-                if marker in original:
-                    original = original.split(marker, 1)[1].strip("/")
-                else:
-                    break
-            cleaned = original
-        if cleaned.startswith(customer_login.strip("/") + "/"):
-            cleaned = cleaned[len(customer_login.strip("/")) + 1 :]
-        return cleaned
-
     def _ensure_dir_options(self, target_customer_id: int, dir_options: list[dict[str, Any]], customer_login: str) -> None:
         if not dir_options:
             return
@@ -347,7 +329,7 @@ class MigratorAccountOps:
     def _ensure_mailboxes(self, target_customer_id: int, mailboxes: list[dict[str, Any]]) -> list[str]:
         existing = {
             str(pick(item, "email_full", "email", "emailaddr", default=""))
-            for item in self.target.list_emails()
+            for item in self.target.list_emails(customerid=target_customer_id)
             if str(pick(item, "email_full", "email", "emailaddr", default=""))
         }
         transferable: list[str] = []

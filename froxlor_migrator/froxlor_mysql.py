@@ -32,8 +32,16 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
     pairs: dict[str, str] = {}
 
     if section == "sql_root":
-        for key, raw_value in re.findall(r"\$sql_root\s*\[\s*\d+\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
-            pairs[key] = raw_value
+        indexed_pairs: dict[str, dict[str, str]] = {}
+        for index, key, raw_value in re.findall(
+            r"\$sql_root\s*\[\s*(\d+)\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;",
+            content,
+        ):
+            indexed_pairs.setdefault(index, {})[key] = raw_value
+        if indexed_pairs:
+            candidates = [item for item in indexed_pairs.values() if item.get("user", "").strip()]
+            if candidates:
+                pairs = max(candidates, key=_credential_score)
     else:
         for key, raw_value in re.findall(r"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
             pairs[key] = raw_value

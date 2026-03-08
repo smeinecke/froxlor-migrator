@@ -12,6 +12,7 @@ from typing import Any
 from ..api import FroxlorApiError, FroxlorClient
 from ..config import AppConfig
 from ..froxlor_mysql import (
+    _credential_score,
     connect_kwargs_from_credentials,
     extract_sql_root_credentials,
     froxlor_userdata_paths,
@@ -264,10 +265,7 @@ class MigratorCore:
             if creds:
                 found.append(creds)
         if found:
-            self._target_sql_root_credentials = max(
-                found,
-                key=lambda item: (1 if item.get("password", "") else 0, 1 if item.get("socket", "") else 0, 1 if item.get("port", "") else 0),
-            )
+            self._target_sql_root_credentials = max(found, key=_credential_score)
             return self._target_sql_root_credentials
         raise MigrationError("Could not parse target sql_root credentials from froxlor userdata files")
 
@@ -291,7 +289,7 @@ class MigratorCore:
         return f"CONVERT(0x{value.encode('utf-8').hex()} USING utf8mb4)"
 
     def _sql_string_literal(self, value: str) -> str:
-        escaped = value.replace("\\", "\\\\").replace("'", "\\'")
+        escaped = value.replace("\\", "\\\\").replace("\x00", "\\0").replace("\n", "\\n").replace("\r", "\\r").replace("\x1a", "\\Z").replace("'", "\\'")
         return f"'{escaped}'"
 
     def _run_source_mysql_query(self, sql: str, database: str) -> list[list[str]]:

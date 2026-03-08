@@ -217,6 +217,11 @@ def _build_replay_command(
     include_files: bool,
     include_databases: bool,
     include_mail: bool,
+    include_certificates: bool,
+    include_domain_zones: bool,
+    include_password_sync: bool,
+    include_forwarders: bool,
+    include_sender_aliases: bool,
 ) -> str:
     parts: list[str] = ["uv", "run", "python", "main.py", "--config", args.config, "--non-interactive", "--yes"]
     if args.apply:
@@ -265,6 +270,16 @@ def _build_replay_command(
         parts.append("--skip-subdomains")
     if args.skip_database_name_validation:
         parts.append("--skip-database-name-validation")
+    if not include_certificates:
+        parts.append("--skip-certificates")
+    if not include_domain_zones:
+        parts.append("--skip-dns-zones")
+    if not include_password_sync:
+        parts.append("--skip-password-sync")
+    if not include_forwarders:
+        parts.append("--skip-forwarders")
+    if not include_sender_aliases:
+        parts.append("--skip-sender-aliases")
 
     return " ".join(shlex.quote(part) for part in parts)
 
@@ -579,6 +594,11 @@ def run_app() -> None:
     parser.add_argument("--include-databases", choices=["yes", "no"], help="Transfer database schema+data")
     parser.add_argument("--include-mail", choices=["yes", "no"], help="Transfer mailbox content via doveadm backup")
     parser.add_argument("--skip-subdomains", action="store_true", help="Skip subdomain creation/update on target")
+    parser.add_argument("--skip-certificates", action="store_true", help="Skip certificate migration")
+    parser.add_argument("--skip-dns-zones", action="store_true", help="Skip custom DNS zone migration")
+    parser.add_argument("--skip-password-sync", action="store_true", help="Skip password hash synchronization")
+    parser.add_argument("--skip-forwarders", action="store_true", help="Skip email forwarder migration")
+    parser.add_argument("--skip-sender-aliases", action="store_true", help="Skip sender alias migration")
     parser.add_argument(
         "--skip-database-name-validation",
         action="store_true",
@@ -921,12 +941,19 @@ def run_app() -> None:
     selected_forwarders = [item for item in forwarders if str(pick(item, "email", "emailaddr", default="")).strip().lower() in mailbox_names]
     selected_sender_aliases = [item for item in sender_aliases if str(pick(item, "email", "emailaddr", default="")).strip().lower() in mailbox_names]
 
+    include_certificates = not args.skip_certificates
+    include_domain_zones = not args.skip_dns_zones
+    include_password_sync = not args.skip_password_sync
+    include_forwarders = not args.skip_forwarders
+    include_sender_aliases = not args.skip_sender_aliases
+
     selected_domain_zones: list[dict] = []
-    for domain_name in sorted(selected_domain_names):
-        try:
-            selected_domain_zones.extend(source.list_domain_zones(domainname=domain_name))
-        except FroxlorApiError:
-            continue
+    if include_domain_zones:
+        for domain_name in sorted(selected_domain_names):
+            try:
+                selected_domain_zones.extend(source.list_domain_zones(domainname=domain_name))
+            except FroxlorApiError:
+                continue
 
     try:
         php_setting_map, source_selected_php_settings = _build_php_setting_map(
@@ -978,8 +1005,8 @@ def run_app() -> None:
     plan.add_row("Subdomains", str(0 if args.skip_subdomains else len(selected_subdomains)))
     plan.add_row("Databases", str(len(selected_databases) if include_databases else 0))
     plan.add_row("Mailboxes", str(len(selected_mailboxes) if include_mail else 0))
-    plan.add_row("Mail forwarders", str(len(selected_forwarders)))
-    plan.add_row("Sender aliases", str(len(selected_sender_aliases)))
+    plan.add_row("Mail forwarders", str(len(selected_forwarders) if include_forwarders else 0))
+    plan.add_row("Sender aliases", str(len(selected_sender_aliases) if include_sender_aliases else 0))
     plan.add_row("FTP accounts", str(len(selected_ftps)))
     plan.add_row("SSH keys", str(len(selected_ssh_keys)))
     plan.add_row("Data dumps", str(len(selected_data_dumps)))
@@ -989,6 +1016,11 @@ def run_app() -> None:
     plan.add_row("Whole customer mode", "yes" if migrate_whole_customer else "no")
     plan.add_row("PHP mappings", str(len(php_setting_map)))
     plan.add_row("Mapped IP entries", str(len(ip_mapping)))
+    plan.add_row("Certificates", "yes" if include_certificates else "no")
+    plan.add_row("Domain zone sync", "yes" if include_domain_zones else "no")
+    plan.add_row("Password hash sync", "yes" if include_password_sync else "no")
+    plan.add_row("Forwarders", "yes" if include_forwarders else "no")
+    plan.add_row("Sender aliases sync", "yes" if include_sender_aliases else "no")
     plan.add_row("Files transfer", "yes" if include_files else "no")
     plan.add_row("Validate DB names", "no" if args.skip_database_name_validation else "yes")
     plan.add_row("Dry-run", "yes" if dry_run else "no")
@@ -1011,6 +1043,11 @@ def run_app() -> None:
         include_files=include_files,
         include_databases=include_databases,
         include_mail=include_mail,
+        include_certificates=include_certificates,
+        include_domain_zones=include_domain_zones,
+        include_password_sync=include_password_sync,
+        include_forwarders=include_forwarders,
+        include_sender_aliases=include_sender_aliases,
     )
     console.print("[bold]Replay command (same selection, non-interactive):[/bold]")
     console.print(replay_command)
@@ -1046,6 +1083,11 @@ def run_app() -> None:
         validate_database_names=not args.skip_database_name_validation,
         php_setting_map=php_setting_map,
         ip_mapping=ip_mapping,
+        include_certificates=include_certificates,
+        include_domain_zones=include_domain_zones,
+        include_password_sync=include_password_sync,
+        include_forwarders=include_forwarders,
+        include_sender_aliases=include_sender_aliases,
     )
 
     try:

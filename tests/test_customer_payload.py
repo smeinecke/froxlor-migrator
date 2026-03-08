@@ -50,6 +50,26 @@ $sql['debug'] = false;
             creds,
         )
 
+    def test_extract_sql_root_credentials_keeps_single_index_consistent(self) -> None:
+        content = """
+<?php
+$sql_root[0]['host'] = '127.0.0.1';
+$sql_root[0]['user'] = 'root';
+$sql_root[0]['password'] = '';
+$sql_root[1]['host'] = 'localhost';
+$sql_root[1]['user'] = 'froxlor_root';
+$sql_root[1]['password'] = 'secret';
+"""
+        creds = extract_sql_root_credentials(content)
+        self.assertEqual(
+            {
+                "host": "localhost",
+                "user": "froxlor_root",
+                "password": "secret",
+            },
+            creds,
+        )
+
     def test_build_mysql_defaults_content(self) -> None:
         content = mysql_defaults_content({
             "user": "root",

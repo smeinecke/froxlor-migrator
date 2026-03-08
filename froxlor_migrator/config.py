@@ -18,6 +18,15 @@ def _expand_env(value: str) -> str:
     return value
 
 
+def _exists_policy(mapping: dict, key: str, default: str) -> str:
+    value = str(mapping.get(key, default)).strip().lower()
+    allowed = {"fail", "skip", "update"}
+    if value not in allowed:
+        joined = ", ".join(sorted(allowed))
+        raise ValueError(f"Invalid config key {key!r}: {value!r} (allowed: {joined})")
+    return value
+
+
 def _must(mapping: dict, key: str) -> str:
     value = mapping.get(key)
     if value is None:
@@ -148,9 +157,9 @@ def load_config(path: str | Path) -> AppConfig:
     )
     behavior_cfg = BehaviorConfig(
         dry_run_default=bool(behavior.get("dry_run_default", True)),
-        domain_exists=str(behavior.get("domain_exists", "fail")),
-        database_exists=str(behavior.get("database_exists", "fail")),
-        mailbox_exists=str(behavior.get("mailbox_exists", "skip")),
+        domain_exists=_exists_policy(behavior, "domain_exists", "fail"),
+        database_exists=_exists_policy(behavior, "database_exists", "fail"),
+        mailbox_exists=_exists_policy(behavior, "mailbox_exists", "skip"),
         parallel=max(1, int(behavior.get("parallel", 1))),
     )
     output_cfg = OutputConfig(manifest_dir=str(output.get("manifest_dir", "./manifests")))

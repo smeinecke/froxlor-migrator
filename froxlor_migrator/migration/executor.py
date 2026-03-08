@@ -11,7 +11,17 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
     def execute(self, selection: Selection) -> MigrationContext:
         total_steps = 2  # preflight + dry-run completion
         if not self.runner.dry_run:
-            total_steps = 16
+            total_steps = 11
+            if selection.include_certificates:
+                total_steps += 1
+            if selection.include_domain_zones:
+                total_steps += 1
+            if selection.include_password_sync:
+                total_steps += 1
+            if selection.include_forwarders:
+                total_steps += 1
+            if selection.include_sender_aliases:
+                total_steps += 1
             if selection.include_subdomains:
                 total_steps += 1
             if selection.include_databases and selection.databases:
@@ -61,8 +71,9 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         if selection.include_subdomains:
             self._ensure_subdomains(target_customer_id, selection.subdomains, selection.php_setting_map)
             _advance("Subdomains synchronized")
-        self._migrate_domain_certificates(selection.domains)
-        _advance("Certificates synchronized")
+        if selection.include_certificates:
+            self._migrate_domain_certificates(selection.domains)
+            _advance("Certificates synchronized")
         self._ensure_ftp_accounts(target_customer_id, selection.ftp_accounts, customer_login)
         _advance("FTP accounts synchronized")
         self._ensure_ssh_keys(target_customer_id, selection.ssh_keys)
@@ -73,8 +84,9 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         _advance("Directory options synchronized")
         self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login)
         _advance("Directory protections synchronized")
-        self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
-        _advance("Domain zones synchronized")
+        if selection.include_domain_zones:
+            self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
+            _advance("Domain zones synchronized")
         self._enable_letsencrypt_after_dns(selection.domains)
         _advance("Let's Encrypt flags synchronized")
 
@@ -105,19 +117,22 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         if selection.mailboxes:
             transferable_mailboxes = self._ensure_mailboxes(target_customer_id, selection.mailboxes)
             _advance("Mailboxes synchronized")
-        self._ensure_email_forwarders(target_customer_id, selection.email_forwarders)
-        _advance("Mail forwarders synchronized")
-        self._ensure_email_sender_aliases(target_customer_id, selection.email_senders)
-        _advance("Sender aliases synchronized")
-        self._sync_password_hashes(
-            target_customer_id,
-            selection.customer,
-            selection.ftp_accounts,
-            selection.mailboxes,
-            selection.dir_protections,
-            customer_login,
-        )
-        _advance("Password hashes synchronized")
+        if selection.include_forwarders:
+            self._ensure_email_forwarders(target_customer_id, selection.email_forwarders)
+            _advance("Mail forwarders synchronized")
+        if selection.include_sender_aliases:
+            self._ensure_email_sender_aliases(target_customer_id, selection.email_senders)
+            _advance("Sender aliases synchronized")
+        if selection.include_password_sync:
+            self._sync_password_hashes(
+                target_customer_id,
+                selection.customer,
+                selection.ftp_accounts,
+                selection.mailboxes,
+                selection.dir_protections,
+                customer_login,
+            )
+            _advance("Password hashes synchronized")
 
         if selection.include_files:
             for domain in selection.domains:

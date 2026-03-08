@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 
 from froxlor_migrator.migrate import Migrator
+from froxlor_migrator.migration.types import Selection
 from froxlor_migrator.verify_migration import (
     _compare_dir_option,
     _compare_dir_protection,
@@ -66,8 +67,9 @@ class DnsIpReplacementTests(unittest.TestCase):
                     ]
                 return []
 
+        target = TargetStub()
         migrator = object.__new__(Migrator)
-        migrator.target = TargetStub()
+        migrator.target = target  # type: ignore[assignment]
         domains = [
             {
                 "ipsandports": [
@@ -98,8 +100,9 @@ class DnsIpReplacementTests(unittest.TestCase):
             def call(self, command: str, params: dict) -> None:
                 self.calls.append((command, params))
 
+        target = TargetStub()
         migrator = object.__new__(Migrator)
-        migrator.target = TargetStub()
+        migrator.target = target  # type: ignore[assignment]
 
         migrator._ensure_domain_zones(
             [
@@ -115,9 +118,9 @@ class DnsIpReplacementTests(unittest.TestCase):
             {"198.51.100.10": "203.0.113.10"},
         )
 
-        self.assertEqual(1, len(migrator.target.calls))
-        self.assertEqual("DomainZones.add", migrator.target.calls[0][0])
-        self.assertEqual("203.0.113.10", migrator.target.calls[0][1]["content"])
+        self.assertEqual(1, len(target.calls))
+        self.assertEqual("DomainZones.add", target.calls[0][0])
+        self.assertEqual("203.0.113.10", target.calls[0][1]["content"])
 
     def test_replace_ip_tokens_updates_zonefile_ip_values(self) -> None:
         migrator = object.__new__(Migrator)
@@ -168,10 +171,13 @@ class DryRunAndNormalizeTests(unittest.TestCase):
             def run(self, command: str, check: bool = True):
                 return None
 
+        source = ClientStub()
+        target = ClientStub()
+        runner = RunnerStub()
         migrator = object.__new__(Migrator)
-        migrator.source = ClientStub()
-        migrator.target = ClientStub()
-        migrator.runner = RunnerStub()
+        migrator.source = source  # type: ignore[assignment]
+        migrator.target = target  # type: ignore[assignment]
+        migrator.runner = runner  # type: ignore[assignment]
 
         selection = type(
             "SelectionStub",
@@ -189,8 +195,8 @@ class DryRunAndNormalizeTests(unittest.TestCase):
 
         self.assertEqual(42, ctx.target_customer_id)
         self.assertEqual({}, ctx.source_to_target_db)
-        self.assertEqual(1, migrator.source.test_calls)
-        self.assertEqual(1, migrator.target.test_calls)
+        self.assertEqual(1, source.test_calls)
+        self.assertEqual(1, target.test_calls)
 
 
 class MysqlPrefixSyncTests(unittest.TestCase):
@@ -208,6 +214,94 @@ class MysqlPrefixSyncTests(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertIn("varname='mysqlprefix'", calls[0])
         self.assertIn("0x44424e414d45", calls[0])
+
+
+class ExecuteToggleTests(unittest.TestCase):
+    def test_execute_skips_certificates_dns_and_password_sync_when_disabled(self) -> None:
+        class ClientStub:
+            def test_connection(self) -> None:
+                return
+
+        class RunnerStub:
+            dry_run = False
+
+            def preflight_commands(self, **kwargs):
+                return []
+
+            def run(self, command: str, check: bool = True):
+                return None
+
+            def transfer_files(self, source_dir: str, target_dir: str) -> None:  # noqa: ARG002
+                return
+
+            def transfer_mailbox(self, mailbox: str) -> None:  # noqa: ARG002
+                return
+
+        source = ClientStub()
+        target = ClientStub()
+        runner = RunnerStub()
+        migrator = object.__new__(Migrator)
+        migrator.source = source  # type: ignore[assignment]
+        migrator.target = target  # type: ignore[assignment]
+        migrator.runner = runner  # type: ignore[assignment]
+
+        calls: list[str] = []
+        migrator._emit_progress = lambda step, total, status: None  # type: ignore[method-assign]
+        migrator._ensure_target_customer = lambda customer, target_customer: 23  # type: ignore[method-assign]
+        migrator._build_ip_value_mapping = lambda domains, ip_mapping: {}  # type: ignore[method-assign]
+        migrator._ensure_domains = lambda *args, **kwargs: calls.append("domains")  # type: ignore[method-assign]
+        migrator._sync_domain_redirects = lambda domains: calls.append("redirects")  # type: ignore[method-assign]
+        migrator._ensure_subdomains = lambda *args, **kwargs: calls.append("subdomains")  # type: ignore[method-assign]
+        migrator._migrate_domain_certificates = lambda domains: calls.append("certs")  # type: ignore[method-assign]
+        migrator._ensure_ftp_accounts = lambda *args, **kwargs: calls.append("ftps")  # type: ignore[method-assign]
+        migrator._ensure_ssh_keys = lambda *args, **kwargs: calls.append("ssh")  # type: ignore[method-assign]
+        migrator._ensure_data_dumps = lambda *args, **kwargs: calls.append("dumps")  # type: ignore[method-assign]
+        migrator._ensure_dir_options = lambda *args, **kwargs: calls.append("dir_options")  # type: ignore[method-assign]
+        migrator._ensure_dir_protections = lambda *args, **kwargs: calls.append("dir_protections")  # type: ignore[method-assign]
+        migrator._ensure_domain_zones = lambda *args, **kwargs: calls.append("zones")  # type: ignore[method-assign]
+        migrator._enable_letsencrypt_after_dns = lambda domains: calls.append("letsencrypt")  # type: ignore[method-assign]
+        migrator._ensure_mailboxes = lambda target_customer_id, mailboxes: []  # type: ignore[method-assign]
+        migrator._ensure_email_forwarders = lambda *args, **kwargs: calls.append("forwarders")  # type: ignore[method-assign]
+        migrator._ensure_email_sender_aliases = lambda *args, **kwargs: calls.append("senders")  # type: ignore[method-assign]
+        migrator._sync_password_hashes = lambda *args, **kwargs: calls.append("passwords")  # type: ignore[method-assign]
+
+        selection = Selection(
+            customer={"loginname": "custalpha", "customerid": 1},
+            target_customer=None,
+            domains=[],
+            subdomains=[],
+            databases=[],
+            mailboxes=[],
+            email_forwarders=[],
+            email_senders=[],
+            ftp_accounts=[],
+            ssh_keys=[],
+            data_dumps=[],
+            dir_protections=[],
+            dir_options=[],
+            domain_zones=[],
+            include_files=False,
+            include_databases=False,
+            include_mail=False,
+            include_subdomains=False,
+            validate_database_names=True,
+            php_setting_map={},
+            ip_mapping={},
+            include_certificates=False,
+            include_domain_zones=False,
+            include_password_sync=False,
+            include_forwarders=False,
+            include_sender_aliases=False,
+        )
+
+        context = migrator.execute(selection)
+
+        self.assertEqual(23, context.target_customer_id)
+        self.assertNotIn("certs", calls)
+        self.assertNotIn("zones", calls)
+        self.assertNotIn("passwords", calls)
+        self.assertNotIn("forwarders", calls)
+        self.assertNotIn("senders", calls)
 
 
 if __name__ == "__main__":

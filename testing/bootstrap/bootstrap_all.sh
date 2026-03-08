@@ -132,7 +132,7 @@ echo "  Admin user: ${SOURCE_ADMIN_USER:-admin}"
 echo "  Admin pass: ${SOURCE_ADMIN_PASSWORD:-admin123!}"
 echo "Target UI: http://127.0.0.1:${TARGET_HTTP_PORT:-8082}"
 echo "  Admin user: ${TARGET_ADMIN_USER:-admin}"
-echo "  Admin pass: ${TARGET_ADMIN_PASSWORD:-admin123!}"
+echo "  Admin pass: ${TARGET_ADMIN_PASSWORD:-admin124!}"
 echo "Source SSH: 127.0.0.1:${SOURCE_SSH_PORT:-2221} (key: $ROOT_DIR/ssh/id_ed25519)"
 echo "Target SSH: 127.0.0.1:${TARGET_SSH_PORT:-2222} (key: $ROOT_DIR/ssh/id_ed25519)"
 

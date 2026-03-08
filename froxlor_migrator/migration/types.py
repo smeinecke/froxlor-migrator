@@ -34,6 +34,11 @@ class Selection:
     validate_database_names: bool
     php_setting_map: dict[int, int]
     ip_mapping: dict[int, int]
+    include_certificates: bool = True
+    include_domain_zones: bool = True
+    include_password_sync: bool = True
+    include_forwarders: bool = True
+    include_sender_aliases: bool = True
 
 
 @dataclass
