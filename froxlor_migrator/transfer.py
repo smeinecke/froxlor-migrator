@@ -184,10 +184,10 @@ class TransferRunner:
         pigz = shlex.quote(self.config.commands.pigz)
 
         if self._command_available(self.config.commands.pzstd) and self._remote_command_available(self.config.commands.pzstd):
-            self._file_transfer_codec = (f"| {pzstd} -1 -T0 ", f"{pzstd} -d -T0 | ")
+            self._file_transfer_codec = (f"| {pzstd} -3 ", f"{pzstd} -d | ")
             return self._file_transfer_codec
         if self._command_available(self.config.commands.pigz) and self._remote_command_available(self.config.commands.pigz):
-            self._file_transfer_codec = (f"| {pigz} -1 ", f"{pigz} -d | ")
+            self._file_transfer_codec = (f"| {pigz} -3 ", f"{pigz} -d | ")
             return self._file_transfer_codec
 
         self._file_transfer_codec = ("", "")
