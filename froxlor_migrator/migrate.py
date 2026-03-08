@@ -253,7 +253,13 @@ class Migrator:
 
     def _froxlor_userdata_paths(self) -> list[str]:
         return [
+            "/var/www/froxlor/lib/userdata.conf",
             "/var/www/froxlor/lib/userdata.inc.php",
+            "/var/customers/webs/froxlor/lib/userdata.conf",
+            "/var/customers/webs/froxlor/lib/userdata.inc.php",
+            "/data/customers/webs/froxlor/lib/userdata.conf",
+            "/data/customers/webs/froxlor/lib/userdata.inc.php",
+            "/var/www/html/froxlor/lib/userdata.conf",
             "/var/www/html/froxlor/lib/userdata.inc.php",
         ]
 
@@ -263,7 +269,7 @@ class Migrator:
         # Froxlor classic format:
         # $sql_root[0]['host']='localhost';
         # $sql_root[0]['user']='root';
-        for key, raw_value in re.findall(r"\$sql_root\s*\[\s*0\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
+        for key, raw_value in re.findall(r"\$sql_root\s*\[\s*\d+\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
             pairs[key] = raw_value
 
         # Alternative array format:

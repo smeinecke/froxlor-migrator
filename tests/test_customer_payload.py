@@ -28,15 +28,15 @@ class CustomerPayloadTests(unittest.TestCase):
         migrator = object.__new__(Migrator)
         content = """
 <?php
-// automatically generated userdata.inc.php for Froxlor
-$sql['host']='localhost';
-$sql['user']='froxlor';
-$sql['password']='11111111';
-$sql['db']='froxlor';
-$sql_root[0]['caption']='Default';
-$sql_root[0]['host']='localhost';
-$sql_root[0]['user']='root';
-$sql_root[0]['password']='222222222';
+// Managed by Ansible - froxlor role
+$sql['host']     = 'localhost';
+$sql['user']     = 'froxlor';
+$sql['password'] = '11111111';
+$sql['db']       = 'froxlor';
+$sql_root[0]['caption']  = 'localhost';
+$sql_root[0]['host']     = 'localhost';
+$sql_root[0]['user']     = 'root';
+$sql_root[0]['password'] = '222222222';
 // enable debugging to browser in case of SQL errors
 $sql['debug'] = false;
 """
