@@ -115,10 +115,10 @@ class TransferRunner:
             if include_database_tools:
                 commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.mysql)}")
         if include_mail_tools:
-            commands.append(f"{sudo} {doveadm} --version >/dev/null 2>&1")
+            commands.append(f"{sudo} {doveadm} help >/dev/null 2>&1")
             if include_ssh:
                 ssh_prefix = self._ssh_prefix()
-                commands.append(f"{ssh_prefix} {sudo} {doveadm} --version >/dev/null 2>&1")
+                commands.append(f"{ssh_prefix} {sudo} {doveadm} help >/dev/null 2>&1")
         return commands
 
     def _get_compression_command(self) -> tuple[str, str]:
@@ -157,12 +157,16 @@ class TransferRunner:
 
         remote_cmd = (
             f"mkdir -p {shlex.quote(target_dir)}"
-            f" && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)} --preserve-permissions --preserve-owner"
+            f" && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
         )
+        if decompress_cmd == "cat":
+            remote_pipeline = remote_cmd
+        else:
+            remote_pipeline = f"{decompress_cmd} | {remote_cmd}"
 
         command = (
-            f"{tar} -cf - -C {shlex.quote(source_dir)} . --preserve-permissions --preserve-owner"
-            f" | {compress_cmd} | {ssh_prefix} '{decompress_cmd} | {shlex.quote(remote_cmd)}'"
+            f"{tar} -cf - -C {shlex.quote(source_dir)} ."
+            f" | {compress_cmd} | {ssh_prefix} {shlex.quote(remote_pipeline)}"
         )
         self.run(command)
 

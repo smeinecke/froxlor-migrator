@@ -796,7 +796,20 @@ class Migrator:
             "custom_suffix": src_name[len(customer_login) + 1 :] if src_name.startswith(f"{customer_login}_") else src_name,
             "sendinfomail": False,
         }
-        self.target.call("Mysqls.add", payload)
+        try:
+            self.target.call("Mysqls.add", payload)
+        except FroxlorApiError as exc:
+            # Froxlor may return non-JSON SQL errors after creating the DB (or when it
+            # already exists). Reconcile state before failing hard.
+            after_error = self._target_database_set()
+            if src_name in after_error:
+                return src_name
+            if self._target_database_exists_physical(src_name):
+                return src_name
+            new_entries_after_error = sorted(after_error - known_before)
+            if len(new_entries_after_error) == 1:
+                return new_entries_after_error[0]
+            raise MigrationError(f"Failed to create target database {src_name!r}: {exc}") from exc
 
         after = self._target_database_set()
         new_entries = sorted(after - known_before)
@@ -805,6 +818,29 @@ class Migrator:
         if len(new_entries) == 1:
             return new_entries[0]
         raise MigrationError(f"Could not detect created target database for source: {src_name}")
+
+    def _target_database_exists_physical(self, db_name: str) -> bool:
+        if self.runner.dry_run:
+            return False
+        if not db_name.strip():
+            return False
+
+        mysql_cmd = shlex.split(self.config.commands.mysql)
+        command = [
+            *mysql_cmd,
+            *self.config.mysql.target_import_args,
+            "-N",
+            "-B",
+            "-e",
+            f"SHOW DATABASES LIKE {self._sql_string_literal(db_name)};",
+        ]
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        except Exception:
+            return False
+        if completed.returncode != 0:
+            return False
+        return db_name in {line.strip() for line in completed.stdout.splitlines() if line.strip()}
 
     def _ensure_subdomains(
         self,

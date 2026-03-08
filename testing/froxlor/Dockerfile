@@ -25,6 +25,8 @@ RUN apt-get update \
         openssh-server \
         postfix \
         postfix-mysql \
+        openssl \
+        python3 \
         php \
         php-bcmath \
         php-cli \
@@ -52,6 +54,9 @@ RUN rm -rf /var/www/html/* \
     && tar -xzf /tmp/froxlor.tar.gz -C /tmp/froxlor \
     && if [ -d /tmp/froxlor/froxlor ]; then cp -a /tmp/froxlor/froxlor/. /var/www/html/; else cp -a /tmp/froxlor/. /var/www/html/; fi \
     && rm -rf /tmp/froxlor /tmp/froxlor.tar.gz
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -sf /root/.local/bin/uv /usr/local/bin/uv
 
 RUN a2enmod rewrite \
     && sed -ri 's!/var/www/html!/var/www/html!g' /etc/apache2/sites-available/000-default.conf \

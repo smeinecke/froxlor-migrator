@@ -61,6 +61,7 @@ services:
       - ${TESTING_BIND_ROOT:-.}/data/source/customers:/data/customers
       - ${TESTING_BIND_ROOT:-.}/ssh:/tmp/bootstrap-ssh:ro
       - ${TESTING_BIND_ROOT:-.}/ssh/id_ed25519:/tmp/id_ed25519:ro
+      - ${TESTING_BIND_ROOT:-.}/..:/workspace:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -109,11 +110,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
       - ..:/workspace
     command: >-
-      sh -lc "apk add --no-cache bash python3 py3-pip curl openssl mariadb-client zstd tar &&
+      sh -lc "apk add --no-cache bash python3 curl openssh-keygen openssl mariadb-client &&
       curl -LsSf https://astral.sh/uv/install.sh | sh &&
       export PATH=/tmp/.local/bin:$PATH &&
-      uv sync --no-dev &&
-      uv run ./bootstrap/bootstrap_all.sh"
+      ./bootstrap/bootstrap_all.sh"
 
 networks:
   source-net:

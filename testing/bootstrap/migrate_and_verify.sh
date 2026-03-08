@@ -74,7 +74,8 @@ if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
 	MYSQL_TARGET_HOST="host.docker.internal"
 fi
 
-TMP_CONFIG="$(mktemp)"
+mkdir -p "$TESTING_DIR/.tmp"
+TMP_CONFIG="$TESTING_DIR/.tmp/bootstrap-migration-config.toml"
 cleanup() {
 	rm -f "$TMP_CONFIG"
 }
@@ -99,7 +100,7 @@ strict_host_key_checking = false
 
 [paths]
 source_web_root = "/data/customers"
-source_transfer_root = "$TESTING_DIR/data/source/customers"
+source_transfer_root = "/data/customers"
 target_web_root = "/data/customers"
 target_owner_user = "www-data"
 target_owner_group = "www-data"
@@ -126,7 +127,7 @@ mailbox_exists = "update"
 parallel = 1
 
 [output]
-manifest_dir = "$REPO_DIR/manifests"
+manifest_dir = "/tmp/manifests"
 EOF
 
 refresh_froxlor_runtime source-froxlor
@@ -137,14 +138,19 @@ wait_api "${TARGET_API_URL}"
 
 seed_mail_probe
 
-python3 "$SCRIPT_DIR/run_migration_apply.py" \
-	--config "$TMP_CONFIG" \
+docker compose exec -T source-froxlor sh -lc \
+	"PYTHONPATH=/workspace uv run --no-project --with requests /workspace/testing/bootstrap/run_migration_apply.py \
+	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
 	--customer custalpha \
-	--customer custgamma
+	--customer custgamma"
 
 migrate_mail_probe_real
 
-PYTHONPATH="$REPO_DIR" python3 -m froxlor_migrator.verify_migration --config "$TMP_CONFIG" --customer custalpha --customer custgamma
+docker compose exec -T source-froxlor sh -lc \
+	"PYTHONPATH=/workspace uv run --no-project --with requests python3 -m froxlor_migrator.verify_migration \
+	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+	--customer custalpha \
+	--customer custgamma"
 
 verify_mail_probe_target
 
