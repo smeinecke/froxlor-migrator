@@ -194,7 +194,10 @@ class TransferRunner:
         if decompress_cmd == "cat":
             remote_pipeline = remote_cmd
         else:
-            remote_pipeline = f"{decompress_cmd} | {remote_cmd}"
+            remote_pipeline = (
+                f"mkdir -p {shlex.quote(target_dir)}"
+                f" && {decompress_cmd} | {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
+            )
 
         command = (
             f"{tar} -cf - -C {shlex.quote(source_dir)} ."

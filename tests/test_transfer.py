@@ -45,6 +45,24 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertIn("boom", error_events[0].get("stderr", ""))
             self.assertEqual(64, int(error_events[0].get("returncode", 0)))
 
+    def test_transfer_files_builds_remote_pipeline_with_tar_as_pipe_consumer(self) -> None:
+        class CaptureRunner(TransferRunner):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.last_command = ""
+
+            def _get_compression_command(self) -> tuple[str, str]:
+                return "pzstd -3", "pzstd -d"
+
+            def run(self, command: str, check: bool = True):
+                self.last_command = command
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = CaptureRunner(config=_config(tmpdir), dry_run=False, manifest_name="test")
+            runner.transfer_files("/src/site", "/dst/site")
+            self.assertIn("mkdir -p /dst/site && pzstd -d | tar -xf - -C /dst/site", runner.last_command)
+
 
 if __name__ == "__main__":
     unittest.main()
