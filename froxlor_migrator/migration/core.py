@@ -28,7 +28,24 @@ from .types import MigrationError, ResourceRow, Selection
 
 
 class MigratorCore:
-    def _relative_customer_path(self, path: str, customer_login: str) -> str: ...
+    def _relative_customer_path(self, path: str, customer_login: str) -> str:
+        cleaned = path.strip().strip("/")
+        if not cleaned:
+            return ""
+        marker = f"/{customer_login.strip('/')}/"
+        lowered = cleaned.lower()
+        if marker.lower() in f"/{lowered}/":
+            original = cleaned
+            while marker in f"/{original}/":
+                if marker in original:
+                    original = original.split(marker, 1)[1].strip("/")
+                else:
+                    break
+            cleaned = original
+        if cleaned.startswith(customer_login.strip("/") + "/"):
+            cleaned = cleaned[len(customer_login.strip("/")) + 1 :]
+        return cleaned
+
     def __init__(
         self,
         config: AppConfig,
@@ -43,6 +60,16 @@ class MigratorCore:
         self._source_sql_credentials: dict[str, str] | None = None
         self._source_sql_root_credentials: dict[str, str] | None = None
         self._target_sql_root_credentials: dict[str, str] | None = None
+        self.progress_callback = None
+
+    def set_progress_callback(self, callback: Any) -> None:
+        self.progress_callback = callback
+
+    def _emit_progress(self, step: int, total: int, status: str) -> None:
+        callback = getattr(self, "progress_callback", None)
+        if callback is None:
+            return
+        callback(step, total, status)
 
     def _customer_login(self, customer: ResourceRow) -> str:
         return str(pick(customer, "loginname", "login", default="")).strip()
@@ -282,6 +309,18 @@ class MigratorCore:
             return mysql_query(connect_kwargs_from_credentials(self._source_sql()), self.config.mysql.source_panel_database, sql)
         except Exception as exc:
             raise MigrationError(f"Source panel SQL query failed: {str(exc)[:400]}") from exc
+
+    def _run_target_mysql_query(self, sql: str, database: str) -> list[list[str]]:
+        if self.runner.dry_run:
+            return []
+        try:
+            with self._target_mysql_connect_kwargs() as connect_kwargs:
+                return mysql_query(connect_kwargs, database, sql)
+        except Exception as exc:
+            raise MigrationError(f"Target SQL query failed: {str(exc)[:400]}") from exc
+
+    def _run_target_panel_query(self, sql: str) -> list[list[str]]:
+        return self._run_target_mysql_query(sql, self.config.mysql.target_panel_database)
 
     def _exec_target_mysql_sql(self, sql: str, database: str) -> None:
         try:

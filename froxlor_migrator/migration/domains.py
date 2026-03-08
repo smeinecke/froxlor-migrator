@@ -24,12 +24,15 @@ class MigratorDomainOps:
         target: FroxlorClient
 
         def _domain_name(self, domain: ResourceRow) -> str: ...
+        def _exec_target_mysql_sql(self, sql: str, database: str) -> None: ...
         def _exec_target_panel_sql(self, sql: str) -> None: ...
         def _get_target_domain(self, domain_name: str) -> ResourceRow | None: ...
         def _run_source_panel_query(self, sql: str) -> list[list[str]]: ...
+        def _run_target_panel_query(self, sql: str) -> list[list[str]]: ...
         def _sql_string_literal(self, value: str) -> str: ...
         def _sql_utf8_literal(self, value: str) -> str: ...
         def _sync_dkim_keys_db(self, domain_name: str, dkim_pubkey: str, dkim_privkey: str) -> None: ...
+        def _target_mysql_access_hosts(self) -> list[str]: ...
         def _target_mysql_connect_kwargs(self) -> AbstractContextManager[dict[str, Any]]: ...
 
     def _load_source_domain_redirects(self, domains: list[dict[str, Any]]) -> list[tuple[str, str, int]]:
@@ -426,7 +429,6 @@ class MigratorDomainOps:
         target_customer_id: int,
         source_db: dict[str, Any],
         known_before: set[str],
-        customer_login: str,
     ) -> str:
         src_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
         if not src_name:
@@ -436,41 +438,115 @@ class MigratorDomainOps:
                 raise MigrationError(f"Target database already exists: {src_name}")
             return src_name
 
-        payload = {
-            "customerid": target_customer_id,
-            "mysql_password": random_password(24),
-            "description": str(pick(source_db, "description", default=f"Migrated from {src_name}")),
-            "custom_suffix": src_name[len(customer_login) + 1 :] if src_name.startswith(f"{customer_login}_") else src_name,
-            "sendinfomail": False,
-        }
-        try:
-            self.target.call("Mysqls.add", payload)
-        except FroxlorApiError as exc:
-            after_error = {
-                str(pick(item, "databasename", "dbname", "database", default=""))
-                for item in self.target.list_mysqls()
-                if str(pick(item, "databasename", "dbname", "database", default=""))
-            }
-            if src_name in after_error:
-                return src_name
-            if self._target_database_exists_physical(src_name):
-                return src_name
-            new_entries_after_error = sorted(after_error - known_before)
-            if len(new_entries_after_error) == 1:
-                return new_entries_after_error[0]
-            raise MigrationError(f"Failed to create target database {src_name!r}: {exc}") from exc
+        description = str(pick(source_db, "description", default=f"Migrated from {src_name}"))
+        self._recreate_database_like_froxlor(target_customer_id, src_name, description)
+        return src_name
 
-        after = {
-            str(pick(item, "databasename", "dbname", "database", default=""))
-            for item in self.target.list_mysqls()
-            if str(pick(item, "databasename", "dbname", "database", default=""))
-        }
-        new_entries = sorted(after - known_before)
-        if src_name in after:
-            return src_name
-        if len(new_entries) == 1:
-            return new_entries[0]
-        raise MigrationError(f"Could not detect created target database for source: {src_name}")
+    def _recreate_database_like_froxlor(self, target_customer_id: int, src_name: str, description: str) -> None:
+        metadata_rows = self._run_target_panel_query(
+            f"SELECT loginname, allowed_mysqlserver, mysql_lastaccountnumber FROM panel_customers WHERE customerid={target_customer_id} LIMIT 1;"
+        )
+        if not metadata_rows or len(metadata_rows[0]) < 3:
+            raise MigrationError(f"Could not load target customer metadata for database fallback: {target_customer_id}")
+        customer_login = str(metadata_rows[0][0] or "").strip()
+        allowed_mysqlserver_raw = str(metadata_rows[0][1] or "").strip()
+        current_last_accountnumber = as_int(metadata_rows[0][2], default=0)
+
+        dbserver = self._default_mysql_server_from_allowed(allowed_mysqlserver_raw)
+        mysql_access_hosts = self._target_mysql_access_hosts()
+        database_password = random_password(24)
+        existing_panel_rows = self._run_target_panel_query(
+            f"SELECT COUNT(*) FROM panel_databases WHERE customerid={target_customer_id} AND databasename={self._sql_utf8_literal(src_name)};"
+        )
+        panel_row_exists = bool(existing_panel_rows and existing_panel_rows[0] and as_int(existing_panel_rows[0][0], default=0) > 0)
+
+        # Keep fallback idempotent across retries if database was physically created in a previous partial run.
+        self._exec_target_mysql_sql(f"CREATE DATABASE IF NOT EXISTS `{src_name}`", "mysql")
+        for host in mysql_access_hosts:
+            self._exec_target_mysql_sql(
+                "CREATE USER IF NOT EXISTS "
+                f"{self._sql_string_literal(src_name)}@{self._sql_string_literal(host)} "
+                f"IDENTIFIED BY {self._sql_string_literal(database_password)};",
+                "mysql",
+            )
+            self._exec_target_mysql_sql(
+                f"GRANT ALL ON `{src_name}`.* TO {self._sql_string_literal(src_name)}@{self._sql_string_literal(host)};",
+                "mysql",
+            )
+            if customer_login and self._target_mysql_user_exists(customer_login, host):
+                self._exec_target_mysql_sql(
+                    f"GRANT ALL ON `{src_name}`.* TO {self._sql_string_literal(customer_login)}@{self._sql_string_literal(host)};",
+                    "mysql",
+                )
+        self._exec_target_mysql_sql("FLUSH PRIVILEGES;", "mysql")
+
+        if not panel_row_exists:
+            self._exec_target_panel_sql(
+                "INSERT INTO panel_databases (customerid, databasename, description, dbserver) "
+                f"VALUES ({target_customer_id}, {self._sql_utf8_literal(src_name)}, "
+                f"{self._sql_utf8_literal(description)}, {dbserver});"
+            )
+            target_prefix = self._target_mysql_prefix_setting()
+            fallback_last = self._fallback_last_account_number(src_name, customer_login, target_prefix)
+            self._exec_target_panel_sql(
+                "UPDATE panel_customers "
+                "SET mysqls_used=mysqls_used+1, "
+                f"mysql_lastaccountnumber=GREATEST(mysql_lastaccountnumber+1, {fallback_last}, {current_last_accountnumber + 1}) "
+                f"WHERE customerid={target_customer_id};"
+            )
+
+    def _default_mysql_server_from_allowed(self, allowed_mysqlserver_raw: str) -> int:
+        allowed: list[int] = []
+        text = allowed_mysqlserver_raw.strip()
+        if text:
+            if text.startswith("["):
+                for token in re.findall(r"\d+", text):
+                    number = as_int(token, default=-1)
+                    if number >= 0:
+                        allowed.append(number)
+            else:
+                number = as_int(text, default=-1)
+                if number >= 0:
+                    allowed.append(number)
+        if not allowed:
+            return 0
+        allowed = sorted(set(allowed))
+        if len(allowed) == 1 and allowed[0] != 0:
+            return allowed[0]
+        return allowed[0]
+
+    def _target_mysql_access_hosts(self) -> list[str]:
+        rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='system' AND varname='mysql_access_host' LIMIT 1;")
+        raw = str(rows[0][0] if rows and rows[0] else "").strip()
+        hosts = [item.strip() for item in raw.split(",") if item.strip()]
+        if not hosts:
+            return ["localhost"]
+        return hosts
+
+    def _target_mysql_prefix_setting(self) -> str:
+        rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='customer' AND varname='mysqlprefix' LIMIT 1;")
+        if not rows or not rows[0]:
+            return ""
+        return str(rows[0][0]).strip()
+
+    def _fallback_last_account_number(self, database_name: str, customer_login: str, mysql_prefix: str) -> int:
+        prefix = mysql_prefix.strip()
+        login = customer_login.strip()
+        if not prefix or prefix.upper() in {"DBNAME", "RANDOM"}:
+            return 0
+        pattern = f"{re.escape(login)}{re.escape(prefix)}(\\d+)$"
+        match = re.fullmatch(pattern, database_name)
+        if not match:
+            return 0
+        return as_int(match.group(1), default=0)
+
+    def _target_mysql_user_exists(self, username: str, host: str) -> bool:
+        rows = self._run_target_panel_query(
+            f"SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user={self._sql_string_literal(username)} AND host={self._sql_string_literal(host)});"
+        )
+        if not rows or not rows[0]:
+            return False
+        return as_int(rows[0][0], default=0) == 1
 
     def _target_database_exists_physical(self, db_name: str) -> bool:
         if self.runner.dry_run:

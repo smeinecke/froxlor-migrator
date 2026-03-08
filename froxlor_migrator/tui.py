@@ -4,6 +4,7 @@ import argparse
 from datetime import datetime
 
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn, TimeElapsedColumn
 from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
@@ -521,7 +522,22 @@ def run_app() -> None:
     )
 
     try:
-        context = migrator.execute(selection)
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            task_id = progress.add_task("Starting migration", total=1)
+
+            def _on_progress(step: int, total: int, status: str) -> None:
+                progress.update(task_id, total=max(total, 1), completed=step, description=f"[cyan]{status}[/cyan]")
+
+            migrator.set_progress_callback(_on_progress)
+            context = migrator.execute(selection)
+            progress.update(task_id, completed=progress.tasks[0].total, description="[green]Migration completed[/green]")
     except (MigrationError, FroxlorApiError, TransferError) as exc:
         console.print(f"[red]Migration failed:[/red] {exc}")
         console.print(f"Manifest: {runner.manifest_path}")
