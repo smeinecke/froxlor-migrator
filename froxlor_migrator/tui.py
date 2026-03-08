@@ -257,6 +257,11 @@ def run_app() -> None:
     parser = argparse.ArgumentParser(description="Froxlor full migration helper")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
     parser.add_argument("--apply", action="store_true", help="Execute changes (default is dry-run)")
+    parser.add_argument(
+        "--skip-database-name-validation",
+        action="store_true",
+        help="Allow source/target database names to differ after Mysqls.add",
+    )
     args = parser.parse_args()
 
     try:
@@ -478,6 +483,7 @@ def run_app() -> None:
     plan.add_row("PHP mappings", str(len(php_setting_map)))
     plan.add_row("Mapped IP entries", str(len(ip_mapping)))
     plan.add_row("Files transfer", "yes" if include_files else "no")
+    plan.add_row("Validate DB names", "no" if args.skip_database_name_validation else "yes")
     plan.add_row("Dry-run", "yes" if dry_run else "no")
     console.print(plan)
 
@@ -507,6 +513,7 @@ def run_app() -> None:
         include_files=include_files,
         include_databases=include_databases,
         include_mail=include_mail,
+        validate_database_names=not args.skip_database_name_validation,
         php_setting_map=php_setting_map,
         ip_mapping=ip_mapping,
     )

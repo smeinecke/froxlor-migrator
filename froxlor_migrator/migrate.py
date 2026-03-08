@@ -39,6 +39,7 @@ class Selection:
     include_files: bool
     include_databases: bool
     include_mail: bool
+    validate_database_names: bool
     php_setting_map: dict[int, int]
     ip_mapping: dict[int, int]
 
@@ -1770,7 +1771,7 @@ class Migrator:
             for source_db in selection.databases:
                 source_name = self._database_name(source_db)
                 target_name = self._create_database_on_target(target_customer_id, source_db, known_before, customer_login)
-                if source_name != target_name:
+                if selection.validate_database_names and source_name != target_name:
                     raise MigrationError(
                         f"Database name mismatch: source={source_name!r} target={target_name!r}; preserving identical DB logins requires matching names"
                     )

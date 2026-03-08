@@ -140,6 +140,7 @@ def _migrate_customer(config_path: str, customer_login: str, include_mail: bool)
         include_files=True,
         include_databases=True,
         include_mail=include_mail,
+        validate_database_names=True,
         php_setting_map=php_setting_map,
         ip_mapping={},
     )
