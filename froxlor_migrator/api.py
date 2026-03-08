@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+from requests.exceptions import JSONDecodeError as RequestsJSONDecodeError
+from requests.exceptions import RequestException
 
 
 class FroxlorApiError(RuntimeError):
@@ -28,20 +31,47 @@ class FroxlorClient:
         if params:
             body["params"] = params
 
-        response = requests.post(
-            self.api_url,
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Basic {self._auth_header()}",
-            },
-            data=json.dumps(body),
-            timeout=self.timeout_seconds,
-        )
+        last_error: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                response = requests.post(
+                    self.api_url,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Authorization": f"Basic {self._auth_header()}",
+                    },
+                    data=json.dumps(body),
+                    timeout=self.timeout_seconds,
+                )
+            except RequestException as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(0.5 * attempt)
+                    continue
+                raise FroxlorApiError(f"API {command} request failed after {attempt} attempts: {exc}") from exc
 
-        if response.status_code >= 400:
-            raise FroxlorApiError(f"API {command} failed with HTTP {response.status_code}: {response.text[:400]}")
+            if response.status_code >= 400:
+                # Retry on transient server-side errors.
+                if response.status_code >= 500 and attempt < 3:
+                    time.sleep(0.5 * attempt)
+                    continue
+                raise FroxlorApiError(f"API {command} failed with HTTP {response.status_code}: {response.text[:400]}")
 
-        data = response.json()
+            try:
+                data = response.json()
+                break
+            except RequestsJSONDecodeError as exc:
+                last_error = exc
+                if attempt < 3:
+                    time.sleep(0.5 * attempt)
+                    continue
+                snippet = response.text[:400]
+                raise FroxlorApiError(
+                    f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}"
+                ) from exc
+        else:
+            raise FroxlorApiError(f"API {command} failed without response: {last_error}")
+
         if data.get("status") and int(data.get("status", 200)) >= 400:
             raise FroxlorApiError(f"API {command} failed: {data.get('status_message', 'unknown error')}")
         return data.get("data")

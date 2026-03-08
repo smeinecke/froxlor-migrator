@@ -137,5 +137,61 @@ class DnsIpReplacementTests(unittest.TestCase):
         self.assertNotIn("2001:db8::1", replaced.split())
 
 
+class DryRunAndNormalizeTests(unittest.TestCase):
+    def test_normalize_domain_setting_for_compare_handles_regex_backslashes(self) -> None:
+        migrator = object.__new__(Migrator)
+        expected = r"location ~ ^/\d\.\d\.\d/ { try_files $uri \.php; }"
+        actual = "location ~ ^/d.d.d/ { try_files $uri .php; }"
+
+        self.assertEqual(
+            migrator._normalize_domain_setting_for_compare(expected),
+            migrator._normalize_domain_setting_for_compare(actual),
+        )
+
+    def test_execute_dry_run_returns_without_mutations(self) -> None:
+        class ClientStub:
+            def __init__(self) -> None:
+                self.test_calls = 0
+
+            def test_connection(self) -> None:
+                self.test_calls += 1
+
+            def call(self, command: str, params=None):
+                raise AssertionError(f"Unexpected mutating API call in dry-run: {command}")
+
+        class RunnerStub:
+            dry_run = True
+
+            def preflight_commands(self, **kwargs):
+                return []
+
+            def run(self, command: str, check: bool = True):
+                return None
+
+        migrator = object.__new__(Migrator)
+        migrator.source = ClientStub()
+        migrator.target = ClientStub()
+        migrator.runner = RunnerStub()
+
+        selection = type(
+            "SelectionStub",
+            (),
+            {
+                "target_customer": {"customerid": 42},
+                "include_files": False,
+                "include_databases": False,
+                "include_mail": False,
+                "domains": [],
+            },
+        )()
+
+        ctx = migrator.execute(selection)  # type: ignore[arg-type]
+
+        self.assertEqual(42, ctx.target_customer_id)
+        self.assertEqual({}, ctx.source_to_target_db)
+        self.assertEqual(1, migrator.source.test_calls)
+        self.assertEqual(1, migrator.target.test_calls)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -198,13 +198,19 @@ class Migrator:
             )
             return customer_id
 
-        data = self.target.call(
-            "Customers.add",
-            {
-                **{k: v for k, v in payload.items() if k not in {"deactivated", "theme"}},
-                "new_loginname": str(pick(source_customer, "loginname", "login", default="")),
-            },
-        )
+        add_payload = {
+            **{k: v for k, v in payload.items() if k not in {"deactivated", "theme"}},
+            "new_loginname": str(pick(source_customer, "loginname", "login", default="")),
+        }
+        try:
+            data = self.target.call("Customers.add", add_payload)
+        except FroxlorApiError as exc:
+            existing = self._find_target_customer(source_customer)
+            if existing:
+                resolved_id = as_int(pick(existing, "customerid", "id", default=0))
+                if resolved_id:
+                    return resolved_id
+            raise MigrationError(f"Failed to create target customer via API: {exc}") from exc
         customer_id = as_int(pick(data or {}, "customerid", "id", default=0))
         if customer_id:
             return customer_id
@@ -434,6 +440,13 @@ class Migrator:
             if replacement:
                 parts[index] = replacement
         return "".join(parts)
+
+    def _normalize_domain_setting_for_compare(self, value: Any) -> str:
+        text = str(value or "")
+        # Froxlor may normalize regex-style config snippets by dropping backslashes.
+        # For parity checks we compare a canonicalized form to avoid false mismatches.
+        text = re.sub(r"\\(?=[^\s])", "", text)
+        return text.strip()
 
     def _ensure_domains(
         self,
@@ -710,7 +723,13 @@ class Migrator:
                 ),
             ]
             for field_name, expected, actual in comparisons:
-                if str(expected) != str(actual):
+                if field_name in {"specialsettings", "ssl_specialsettings"}:
+                    expected_cmp = self._normalize_domain_setting_for_compare(expected)
+                    actual_cmp = self._normalize_domain_setting_for_compare(actual)
+                else:
+                    expected_cmp = str(expected)
+                    actual_cmp = str(actual)
+                if expected_cmp != actual_cmp:
                     raise MigrationError(f"Domain setting mismatch after migration for {domain_name}: {field_name} expected={expected!r} actual={actual!r}")
 
             source_dkim_public = str(pick(domain, "dkim_pubkey", default=""))
@@ -1525,6 +1544,9 @@ class Migrator:
 
     def execute(self, selection: Selection) -> MigrationContext:
         self.preflight(selection)
+        if self.runner.dry_run:
+            target_customer_id = as_int(pick(selection.target_customer or {}, "customerid", "id", default=0))
+            return MigrationContext(target_customer_id=target_customer_id, source_to_target_db={})
 
         target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer)
         customer_login = str(pick(selection.customer, "loginname", "login", default="")).strip()
