@@ -68,6 +68,25 @@ class TransferRunner:
         options.extend([f"-p {self.config.ssh.port}"])
         return f"{ssh} {' '.join(options)} -l {shlex.quote(self.config.ssh.user)} {shlex.quote(self.config.ssh.host)}"
 
+    @staticmethod
+    def _command_available(command: str) -> bool:
+        try:
+            result = subprocess.run(["bash", "-c", f"command -v {shlex.quote(command)}"], capture_output=True, text=True)
+            return result.returncode == 0
+        except Exception:
+            return False
+
+    def _remote_command_available(self, command: str) -> bool:
+        try:
+            result = subprocess.run(
+                ["bash", "-c", f"{self._ssh_prefix()} command -v {shlex.quote(command)}"],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except Exception:
+            return False
+
     def preflight_commands(
         self,
         *,
@@ -80,26 +99,11 @@ class TransferRunner:
         ssh_binary = shlex.quote(shlex.split(self.config.commands.ssh)[0])
         commands = [f"command -v {shlex.quote(self.config.commands.tar)}"]
 
-        # Check for available compression tools (optional)
-        compression_commands = []
-        try:
-            pzstd = shlex.quote(self.config.commands.pzstd)
-            result = subprocess.run(["bash", "-c", f"command -v {pzstd}"], capture_output=True, text=True)
-            if result.returncode == 0:
-                compression_commands.append(f"command -v {pzstd}")
-        except Exception:
-            pass
-
-        try:
-            pigz = shlex.quote(self.config.commands.pigz)
-            result = subprocess.run(["bash", "-c", f"command -v {pigz}"], capture_output=True, text=True)
-            if result.returncode == 0:
-                compression_commands.append(f"command -v {pigz}")
-        except Exception:
-            pass
-
-        # Only add compression commands if they're available
-        commands.extend(compression_commands)
+        # Compression tools are optional and auto-fallback at transfer time.
+        if self._command_available(self.config.commands.pzstd):
+            commands.append(f"command -v {shlex.quote(self.config.commands.pzstd)}")
+        if self._command_available(self.config.commands.pigz):
+            commands.append(f"command -v {shlex.quote(self.config.commands.pigz)}")
 
         if include_database_tools:
             commands.append(f"command -v {shlex.quote(self.config.commands.mysqldump)}")
@@ -108,9 +112,6 @@ class TransferRunner:
             commands.append(f"command -v {ssh_binary}")
             ssh_prefix = self._ssh_prefix()
             commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.tar)}")
-            # Only add compression commands for SSH if they're available locally
-            for cmd in compression_commands:
-                commands.append(f"{ssh_prefix} {cmd}")
             if include_database_tools:
                 commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.mysql)}")
         if include_mail_tools:
@@ -125,29 +126,22 @@ class TransferRunner:
         Returns (compress_cmd, decompress_cmd) tuple.
         Prefers pzstd with -3 level, falls back to pigz, then no compression.
         """
-        pzstd = shlex.quote(self.config.commands.pzstd)
-        pigz = shlex.quote(self.config.commands.pigz)
+        pzstd = self.config.commands.pzstd
+        pigz = self.config.commands.pigz
 
-        # Try pzstd first
-        try:
-            result = subprocess.run(["bash", "-c", f"command -v {pzstd}"], capture_output=True, text=True)
-            if result.returncode == 0:
-                # Use pzstd with compression level 3
-                compress_cmd = f"{pzstd} -3"
-                decompress_cmd = f"{pzstd} -d"
-                return compress_cmd, decompress_cmd
-        except Exception:
-            pass
+        # Prefer zstd stream when both ends can decode it.
+        if self._command_available(pzstd):
+            if self._remote_command_available(pzstd):
+                return f"{shlex.quote(pzstd)} -3", f"{shlex.quote(pzstd)} -d"
+            if self._remote_command_available("zstd"):
+                return f"{shlex.quote(pzstd)} -3", "zstd -d"
 
-        # Fall back to pigz
-        try:
-            result = subprocess.run(["bash", "-c", f"command -v {pigz}"], capture_output=True, text=True)
-            if result.returncode == 0:
-                compress_cmd = f"{pigz}"
-                decompress_cmd = f"{pigz} -d"
-                return compress_cmd, decompress_cmd
-        except Exception:
-            pass
+        # gzip stream fallback.
+        if self._command_available(pigz):
+            if self._remote_command_available(pigz):
+                return shlex.quote(pigz), f"{shlex.quote(pigz)} -d"
+            if self._remote_command_available("gzip"):
+                return shlex.quote(pigz), "gzip -d"
 
         # No compression available - use cat as no-op
         compress_cmd = "cat"

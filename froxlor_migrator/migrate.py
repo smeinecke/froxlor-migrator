@@ -7,7 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from typing import Any
 
-from .api import FroxlorClient
+from .api import FroxlorApiError, FroxlorClient
 from .config import AppConfig
 from .transfer import TransferRunner
 from .util import as_bool, as_int, pick, random_password
@@ -397,6 +397,15 @@ class Migrator:
                 source_ip = str(pick(ip_row, "ip", default="")).strip().lower()
                 if source_ip_id > 0 and source_ip:
                     source_ip_by_id[source_ip_id] = source_ip
+        missing_source_ids = [as_int(source_id) for source_id in ip_mapping if as_int(source_id) > 0 and as_int(source_id) not in source_ip_by_id]
+        if missing_source_ids:
+            for row in self.source.listing("IpsAndPorts.listing"):
+                source_ip_id = as_int(pick(row, "id", default=0))
+                if source_ip_id not in missing_source_ids:
+                    continue
+                source_ip = str(pick(row, "ip", default="")).strip().lower()
+                if source_ip:
+                    source_ip_by_id[source_ip_id] = source_ip
 
         target_ip_by_id = {
             as_int(pick(row, "id", default=0)): str(pick(row, "ip", default="")).strip().lower()
@@ -462,7 +471,8 @@ class Migrator:
                 "email_only": bool(as_int(pick(domain, "email_only", default=0))),
                 "phpenabled": bool(as_int(pick(domain, "phpenabled", default=1))),
                 "sslenabled": bool(as_int(pick(domain, "sslenabled", "ssl_enabled", default=1))),
-                "letsencrypt": bool(as_int(pick(domain, "letsencrypt", default=0))),
+                # Enable LE in a second phase after domain-zone sync to avoid add-time DNS/IP validation failures.
+                "letsencrypt": False,
                 "specialsettings": str(pick(domain, "specialsettings", default="")),
                 "ssl_specialsettings": str(pick(domain, "ssl_specialsettings", default="")),
                 "include_specialsettings": bool(as_int(pick(domain, "include_specialsettings", default=0))),
@@ -519,7 +529,14 @@ class Migrator:
                     raise MigrationError(f"Target domain lookup failed: {domain_name}")
                 domain_id = as_int(pick(existing, "id", default=0))
             else:
-                self.target.call("Domains.add", {"domain": domain_name, **base_payload})
+                try:
+                    self.target.call("Domains.add", {"domain": domain_name, **base_payload})
+                except FroxlorApiError as exc:
+                    message = str(exc).lower()
+                    if "let's encrypt" in message or "letsencrypt" in message:
+                        self.target.call("Domains.add", {"domain": domain_name, **{**base_payload, "letsencrypt": False}})
+                    else:
+                        raise
                 existing_domains.add(domain_name)
                 created = self._get_target_domain(domain_name)
                 if not created:
@@ -717,6 +734,26 @@ class Migrator:
                 missing_ip_ids = {ip_id for ip_id in mapped_ip_ids if ip_id not in actual_ip_ids}
                 if missing_ip_ids:
                     raise MigrationError(f"Domain IP mapping mismatch after migration for {domain_name}: missing target IP ids {sorted(missing_ip_ids)}")
+
+    def _enable_letsencrypt_after_dns(self, domains: list[dict[str, Any]]) -> None:
+        for domain in domains:
+            if not bool(as_int(pick(domain, "letsencrypt", default=0))):
+                continue
+            domain_name = self._domain_name(domain)
+            if not domain_name:
+                continue
+            target_domain = self._get_target_domain(domain_name)
+            if not target_domain:
+                raise MigrationError(f"Could not find target domain for Let's Encrypt enablement: {domain_name}")
+            domain_id = as_int(pick(target_domain, "id", default=0))
+            self.target.call(
+                "Domains.update",
+                {
+                    "id": domain_id,
+                    "domainname": domain_name,
+                    "letsencrypt": True,
+                },
+            )
 
     def _create_database_on_target(
         self,
@@ -1515,6 +1552,7 @@ class Migrator:
         self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login)
         self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login)
         self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
+        self._enable_letsencrypt_after_dns(selection.domains)
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:
