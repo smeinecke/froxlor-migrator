@@ -11,10 +11,12 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
     def execute(self, selection: Selection) -> MigrationContext:
         total_steps = 2  # preflight + dry-run completion
         if not self.runner.dry_run:
-            total_steps = 11
+            total_steps = 10
             if selection.include_certificates:
                 total_steps += 1
             if selection.include_domain_zones:
+                total_steps += 1
+            if selection.include_letsencrypt_flags:
                 total_steps += 1
             if selection.include_password_sync:
                 total_steps += 1
@@ -103,9 +105,18 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             _status("Synchronizing domain zones")
             self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
             _advance("Domain zones synchronized")
-        _status("Synchronizing Let's Encrypt flags")
-        self._enable_letsencrypt_after_dns(selection.domains)
-        _advance("Let's Encrypt flags synchronized")
+        if selection.include_letsencrypt_flags:
+            _status("Synchronizing Let's Encrypt flags")
+            try:
+                self._enable_letsencrypt_after_dns(selection.domains)
+                _advance("Let's Encrypt flags synchronized")
+            except Exception as exc:  # non-fatal by design for post-sync ACME edge-cases
+                self.runner.debug_event(
+                    "letsencrypt_flag_sync_non_fatal_error",
+                    error=str(exc)[:500],
+                )
+                summary = str(exc).splitlines()[0].strip()[:120]
+                _advance(f"Let's Encrypt flags skipped (non-fatal): {summary}")
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:

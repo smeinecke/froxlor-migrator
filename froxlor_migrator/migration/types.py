@@ -38,6 +38,7 @@ class Selection:
     include_domain_zones: bool = True
     include_password_sync: bool = True
     include_forwarders: bool = True
+    include_letsencrypt_flags: bool = True
     include_sender_aliases: bool = True
 
 
