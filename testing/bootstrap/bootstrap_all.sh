@@ -11,6 +11,23 @@ if [[ ! -f "$ROOT_DIR/.env" ]]; then
 	exit 1
 fi
 
+if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
+	if [[ -z "${TESTING_BIND_ROOT:-}" ]]; then
+		workspace_bind_source="$(docker inspect "$HOSTNAME" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)"
+		if [[ -n "$workspace_bind_source" ]]; then
+			TESTING_BIND_ROOT="$workspace_bind_source/testing"
+		fi
+	fi
+	if [[ -z "${TESTING_BIND_ROOT:-}" ]]; then
+		echo "Could not determine TESTING_BIND_ROOT for nested docker compose usage." >&2
+		echo "Set TESTING_BIND_ROOT to the host path of the testing directory and retry." >&2
+		exit 1
+	fi
+	export TESTING_BIND_ROOT
+else
+	export TESTING_BIND_ROOT="${TESTING_BIND_ROOT:-$ROOT_DIR}"
+fi
+
 set -a
 source "$ROOT_DIR/.env"
 set +a

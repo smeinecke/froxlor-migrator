@@ -11,7 +11,7 @@ services:
       MYSQL_USER: ${SOURCE_DB_USER:-froxlor}
       MYSQL_PASSWORD: ${SOURCE_DB_PASSWORD:-froxlor}
     volumes:
-      - ./data/source/db:/var/lib/mysql
+      - ${TESTING_BIND_ROOT:-.}/data/source/db:/var/lib/mysql
     ports:
       - "${SOURCE_DB_PORT:-33061}:3306"
     networks:
@@ -29,7 +29,7 @@ services:
       MYSQL_USER: ${TARGET_DB_USER:-froxlor}
       MYSQL_PASSWORD: ${TARGET_DB_PASSWORD:-froxlor}
     volumes:
-      - ./data/target/db:/var/lib/mysql
+      - ${TESTING_BIND_ROOT:-.}/data/target/db:/var/lib/mysql
     ports:
       - "${TARGET_DB_PORT:-33062}:3306"
     networks:
@@ -58,9 +58,9 @@ services:
       - "${SOURCE_HTTP_PORT:-8081}:80"
       - "${SOURCE_SSH_PORT:-2221}:22"
     volumes:
-      - ./data/source/customers:/data/customers
-      - ./ssh/authorized_keys:/tmp/authorized_keys:ro
-      - ./ssh/id_ed25519:/tmp/id_ed25519:ro
+      - ${TESTING_BIND_ROOT:-.}/data/source/customers:/data/customers
+      - ${TESTING_BIND_ROOT:-.}/ssh:/tmp/bootstrap-ssh:ro
+      - ${TESTING_BIND_ROOT:-.}/ssh/id_ed25519:/tmp/id_ed25519:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -89,8 +89,8 @@ services:
       - "${TARGET_HTTP_PORT:-8082}:80"
       - "${TARGET_SSH_PORT:-2222}:22"
     volumes:
-      - ./data/target/customers:/data/customers
-      - ./ssh/authorized_keys:/tmp/authorized_keys:ro
+      - ${TESTING_BIND_ROOT:-.}/data/target/customers:/data/customers
+      - ${TESTING_BIND_ROOT:-.}/ssh:/tmp/bootstrap-ssh:ro
     networks:
       - target-net
 

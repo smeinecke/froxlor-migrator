@@ -386,12 +386,53 @@ class Migrator:
                 if expected != actual:
                     raise MigrationError(f"Certificate mismatch for {domain_name}: {field} expected={len(expected)}B actual={len(actual)}B")
 
+    def _build_ip_value_mapping(self, domains: list[dict[str, Any]], ip_mapping: dict[int, int]) -> dict[str, str]:
+        if not ip_mapping:
+            return {}
+
+        source_ip_by_id: dict[int, str] = {}
+        for domain in domains:
+            for ip_row in pick(domain, "ipsandports", default=[]) or []:
+                source_ip_id = as_int(pick(ip_row, "id", default=0))
+                source_ip = str(pick(ip_row, "ip", default="")).strip().lower()
+                if source_ip_id > 0 and source_ip:
+                    source_ip_by_id[source_ip_id] = source_ip
+
+        target_ip_by_id = {
+            as_int(pick(row, "id", default=0)): str(pick(row, "ip", default="")).strip().lower()
+            for row in self.target.listing("IpsAndPorts.listing")
+            if as_int(pick(row, "id", default=0)) > 0 and str(pick(row, "ip", default="")).strip()
+        }
+
+        mapping: dict[str, str] = {}
+        for source_ip_id, target_ip_id in ip_mapping.items():
+            source_ip = source_ip_by_id.get(as_int(source_ip_id), "").strip().lower()
+            target_ip = target_ip_by_id.get(as_int(target_ip_id), "").strip().lower()
+            if not source_ip or not target_ip or source_ip == target_ip:
+                continue
+            mapping[source_ip] = target_ip
+        return mapping
+
+    def _replace_ip_tokens(self, value: str, replacements: dict[str, str]) -> str:
+        if not value or not replacements:
+            return value
+        parts = re.split(r"(\s+)", value)
+        for index, part in enumerate(parts):
+            token = part.strip()
+            if not token:
+                continue
+            replacement = replacements.get(token.lower())
+            if replacement:
+                parts[index] = replacement
+        return "".join(parts)
+
     def _ensure_domains(
         self,
         target_customer_id: int,
         domains: list[dict[str, Any]],
         php_setting_map: dict[int, int],
         ip_mapping: dict[int, int],
+        ip_value_mapping: dict[str, str],
         customer_login: str,
     ) -> None:
         existing_domains = self._target_domain_set()
@@ -452,7 +493,7 @@ class Migrator:
                 "termination_date": str(pick(domain, "termination_date", default="")),
                 "caneditdomain": bool(as_int(pick(domain, "caneditdomain", default=0))),
                 "isbinddomain": bool(as_int(pick(domain, "isbinddomain", default=0))),
-                "zonefile": str(pick(domain, "zonefile", default="")),
+                "zonefile": self._replace_ip_tokens(str(pick(domain, "zonefile", default="")), ip_value_mapping),
                 "dkim": bool(as_int(pick(domain, "dkim", default=0))),
                 "specialsettingsforsubdomains": bool(as_int(pick(domain, "specialsettingsforsubdomains", default=0))),
                 "phpsettingsforsubdomains": bool(as_int(pick(domain, "phpsettingsforsubdomains", default=0))),
@@ -1256,7 +1297,7 @@ class Migrator:
             return False
         return True
 
-    def _ensure_domain_zones(self, domain_zones: list[dict[str, Any]]) -> None:
+    def _ensure_domain_zones(self, domain_zones: list[dict[str, Any]], ip_value_mapping: dict[str, str]) -> None:
         if not domain_zones:
             return
         by_domain: dict[str, list[dict[str, Any]]] = {}
@@ -1281,11 +1322,15 @@ class Migrator:
             for row in rows:
                 if not self._is_custom_zone_record(row):
                     continue
+                record_type = str(pick(row, "type", default="")).strip().upper()
+                content = str(pick(row, "content", default="")).strip()
+                if record_type in {"A", "AAAA"}:
+                    content = self._replace_ip_tokens(content, ip_value_mapping)
                 key = (
                     str(pick(row, "record", default="")).strip().lower(),
-                    str(pick(row, "type", default="")).strip().upper(),
+                    record_type,
                     as_int(pick(row, "prio", default=0)),
-                    str(pick(row, "content", default="")).strip().lower(),
+                    content.lower(),
                     as_int(pick(row, "ttl", default=18000)),
                 )
                 if key in existing:
@@ -1446,6 +1491,7 @@ class Migrator:
 
         target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer)
         customer_login = str(pick(selection.customer, "loginname", "login", default="")).strip()
+        ip_value_mapping = self._build_ip_value_mapping(selection.domains, selection.ip_mapping)
 
         # Check if username changed between source and target for permission fixing
         target_customer_login = None
@@ -1457,6 +1503,7 @@ class Migrator:
             selection.domains,
             selection.php_setting_map,
             selection.ip_mapping,
+            ip_value_mapping,
             customer_login,
         )
         self._sync_domain_redirects(selection.domains)
@@ -1467,7 +1514,7 @@ class Migrator:
         self._ensure_data_dumps(target_customer_id, selection.data_dumps)
         self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login)
         self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login)
-        self._ensure_domain_zones(selection.domain_zones)
+        self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:

@@ -25,9 +25,9 @@ fi
 
 mkdir -p /var/run/sshd
 ssh-keygen -A >/dev/null 2>&1 || true
-if [[ -f /tmp/authorized_keys ]]; then
+if [[ -f /tmp/bootstrap-ssh/authorized_keys ]]; then
 	mkdir -p /root/.ssh
-	install -m 600 /tmp/authorized_keys /root/.ssh/authorized_keys
+	install -m 600 /tmp/bootstrap-ssh/authorized_keys /root/.ssh/authorized_keys
 	chown -R root:root /root/.ssh
 fi
 cat >/etc/ssh/sshd_config.d/99-froxlor-test.conf <<EOF

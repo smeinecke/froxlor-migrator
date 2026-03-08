@@ -47,7 +47,17 @@ def _choose_rows(title: str, rows: list[dict], cols: list[tuple[str, str]], mult
                 console.print("[red]Invalid selection[/red]")
 
     while True:
-        raw = Prompt.ask("Select entry number")
+        if allow_empty:
+            default = "new"
+            prompt_text = f"Select entry number (or {default} to create new)"
+            raw = Prompt.ask(prompt_text, default=default)
+        else:
+            prompt_text = "Select entry number"
+            raw = Prompt.ask(prompt_text)
+
+        if allow_empty and raw == "new":
+            return []
+
         try:
             idx = int(raw)
             if 1 <= idx <= len(rows):
@@ -326,23 +336,22 @@ def run_app() -> None:
             target_customers = target.list_customers()
             target_customer_rows = _customer_view(target_customers)
 
-            # Add "Create new customer" option
-            new_customer_option = {"id": 0, "login": "new", "name": "(Create new customer)", "email": "", "_raw": None}
-            all_options = [new_customer_option] + target_customer_rows
+            if target_customer_rows:
+                selected_target_row = _choose_rows(
+                    "Target customers",
+                    target_customer_rows,
+                    cols=[("id", "ID"), ("login", "Login"), ("name", "Name"), ("email", "Email")],
+                    multi=False,
+                    allow_empty=True,
+                )
 
-            selected_target_row = _choose_rows(
-                "Target customers",
-                all_options,
-                cols=[("id", "ID"), ("login", "Login"), ("name", "Name"), ("email", "Email")],
-                multi=False,
-            )
-
-            if selected_target_row:
-                if selected_target_row[0]["_raw"] is None:
-                    console.print("[yellow]New customer will be created from source customer data.[/yellow]")
-                else:
+                if selected_target_row:
                     target_customer = selected_target_row[0]["_raw"]
                     console.print(f"[green]Using existing target customer: {pick(target_customer, 'loginname', 'login', default='unknown')}[/green]")
+                else:
+                    console.print("[yellow]New customer will be created from source customer data.[/yellow]")
+            else:
+                console.print("[yellow]No customers found on target system. New customer will be created from source customer data.[/yellow]")
         except FroxlorApiError as exc:
             console.print(f"[red]API error while listing target customers:[/red] {exc}")
             return
