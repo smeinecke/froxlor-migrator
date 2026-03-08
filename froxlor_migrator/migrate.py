@@ -471,6 +471,9 @@ class Migrator:
             domain_name = self._domain_name(domain).lower()
             if not domain_name:
                 continue
+            # LE-managed domains should not be validated against static certificate blobs.
+            if bool(as_int(pick(domain, "letsencrypt", default=0))):
+                continue
             source_cert = source_by_domain.get(domain_name)
             if not source_cert:
                 continue
