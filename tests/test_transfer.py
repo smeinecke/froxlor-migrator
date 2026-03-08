@@ -84,6 +84,18 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertEqual("debug", events[-1]["kind"])
             self.assertEqual("visible", events[-1]["message"])
 
+    def test_progress_event_is_logged_and_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir), dry_run=True, manifest_name="progress", debug=False)
+            runner.progress_event(1, 10, "Step one")
+            runner.progress_event(1, 10, "Step one")
+            runner.progress_event(2, 10, "Step two")
+            events = json.loads((Path(tmpdir) / "progress.json").read_text(encoding="utf-8"))
+            progress_events = [event for event in events if event.get("kind") == "progress"]
+            self.assertEqual(2, len(progress_events))
+            self.assertEqual("Step one", progress_events[0]["status"])
+            self.assertEqual("Step two", progress_events[1]["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

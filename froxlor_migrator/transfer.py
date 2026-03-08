@@ -34,6 +34,7 @@ class TransferRunner:
         self.debug = debug
         self._ssh = SshDriver(config)
         self._file_transfer_codec: tuple[str, str] | None = None
+        self._last_progress: tuple[int, int, str] | None = None
         manifest_dir = ensure_dir(config.output.manifest_dir)
         self.manifest_path = manifest_dir / f"{manifest_name}.json"
         self.events: list[dict[str, Any]] = []
@@ -50,6 +51,20 @@ class TransferRunner:
         if not self.debug:
             return
         self._log_event("debug", {"message": message, **payload})
+
+    def progress_event(self, step: int, total: int, status: str) -> None:
+        key = (step, total, status)
+        if key == self._last_progress:
+            return
+        self._last_progress = key
+        self._log_event(
+            "progress",
+            {
+                "step": step,
+                "total": total,
+                "status": status,
+            },
+        )
 
     @staticmethod
     def _truncate_output(value: str, limit: int = 16000) -> str:
@@ -173,7 +188,7 @@ class TransferRunner:
         src = shlex.quote(source_dir)
         remote_tar = shlex.quote(self.config.commands.tar)
         remote_cmd = f"mkdir -p {shlex.quote(target_dir)} && {remote_codec} {remote_tar} -C {shlex.quote(target_dir)} -xpf -"
-        command = f"{tar} -C {src} -cf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
+        command = f"{tar} -C {src} -cvf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
         self.run(command)
 
     def _select_file_transfer_codec(self) -> tuple[str, str]:

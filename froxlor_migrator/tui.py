@@ -1108,9 +1108,17 @@ def run_app() -> None:
             console=console,
         ) as progress:
             task_id = progress.add_task("Starting migration", total=1)
+            last_progress_line: str | None = None
 
             def _on_progress(step: int, total: int, status: str) -> None:
+                nonlocal last_progress_line
                 progress.update(task_id, total=max(total, 1), completed=step, description=f"[cyan]{status}[/cyan]")
+                runner.progress_event(step, max(total, 1), status)
+                if args.non_interactive:
+                    line = f"Progress {step}/{max(total, 1)}: {status}"
+                    if line != last_progress_line:
+                        console.print(line)
+                        last_progress_line = line
 
             migrator.set_progress_callback(_on_progress)
             context = migrator.execute(selection)
