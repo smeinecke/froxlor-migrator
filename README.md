@@ -67,6 +67,29 @@ Apply mode:
 uv run python main.py --config config.toml --apply
 ```
 
+Fully non-interactive (no prompts/TUI):
+
+```bash
+uv run python main.py \
+  --config config.toml \
+  --apply \
+  --non-interactive \
+  --yes \
+  --source-customer custalpha \
+  --domain-only \
+  --target-customer custalpha \
+  --domains alpha.example,shop.alpha.example \
+  --subdomains all \
+  --databases custalpha_wpdemo \
+  --mailboxes info@alpha.example,support@alpha.example \
+  --ftp-accounts none \
+  --include-files yes \
+  --include-databases yes \
+  --include-mail no \
+  --php-map 'fpm 8.3|/usr/bin/php8.3=>fpm 8.3|/usr/bin/php8.3' \
+  --ip-map '192.0.2.10:80:0=>198.51.100.20:80:0'
+```
+
 Post-migration parity verification:
 
 ```bash
@@ -107,6 +130,8 @@ This provides:
   - existing mailboxes: skip
 - PHP setting ids used by selected domains are mapped interactively to target PHP setting ids.
 - Domain IP/port assignments can be mapped interactively to target IP IDs.
+- Optional CLI selectors are available to automate migration without prompts (`--non-interactive`, `--source-customer`, `--domains`, `--databases`, `--mailboxes`, `--subdomains`, `--ftp-accounts`, `--php-map`, `--ip-map`, and `--yes`).
+- `--php-map` and `--ip-map` support stable name mapping with `source=>target` pairs (PHP: `description|binary`, IP: `ip:port:ssl`).
 - SSL options and custom certificates are migrated via API where available.
 - DKIM enablement is migrated. If API migration leaves key mismatch, migrator performs a DB-level fallback update on target `panel_domains` and re-verifies key parity.
 - Domain-zone migration intentionally skips system/default records and only syncs custom records.
