@@ -404,6 +404,21 @@ class Migrator:
     def _exec_target_panel_sql(self, sql: str) -> None:
         self._exec_target_mysql_sql(sql, self.config.mysql.target_panel_database)
 
+    def _transfer_database_with_defaults(self, source_db: str, target_db: str) -> None:
+        source_defaults_file = self._ensure_source_mysql_defaults_file()
+        target_defaults_file = self._ensure_target_mysql_defaults_file()
+
+        source_defaults_arg = f"--defaults-file={shlex.quote(source_defaults_file)} " if source_defaults_file else ""
+        target_defaults_arg = f"--defaults-file={shlex.quote(target_defaults_file)} " if target_defaults_file else ""
+
+        dump_args = " ".join(shlex.quote(x) for x in self.config.mysql.source_dump_args)
+        import_args = " ".join(shlex.quote(x) for x in self.config.mysql.target_import_args)
+        mysqldump = shlex.quote(self.config.commands.mysqldump)
+        mysql = shlex.quote(self.config.commands.mysql)
+        remote_cmd = f"{mysql} {target_defaults_arg}{import_args} {shlex.quote(target_db)}"
+        command = f"{mysqldump} {source_defaults_arg}{dump_args} {shlex.quote(source_db)} | {self._ssh_prefix()} {shlex.quote(remote_cmd)}"
+        self.runner.run(command)
+
     def _sync_dkim_keys_db(self, domain_name: str, dkim_pubkey: str, dkim_privkey: str) -> None:
         update_sql = (
             "UPDATE panel_domains "
@@ -1761,7 +1776,7 @@ class Migrator:
                     )
                 known_before.add(target_name)
                 db_map[source_name] = target_name
-                self.runner.transfer_database(source_name, target_name)
+                self._transfer_database_with_defaults(source_name, target_name)
             self._sync_database_login_hashes(db_map)
 
         transferable_mailboxes: list[str] = []

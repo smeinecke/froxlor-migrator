@@ -207,7 +207,7 @@ class MysqlPrefixSyncTests(unittest.TestCase):
         migrator._sync_target_mysql_prefix_setting()
         self.assertEqual(1, len(calls))
         self.assertIn("varname='mysqlprefix'", calls[0])
-        self.assertIn("DBNAME", calls[0])
+        self.assertIn("0x44424e414d45", calls[0])
 
 
 if __name__ == "__main__":
