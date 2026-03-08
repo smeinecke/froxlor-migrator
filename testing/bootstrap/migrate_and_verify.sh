@@ -64,14 +64,9 @@ migrate_mail_probe_real() {
 		"doveadm backup -u '$MAILBOX_PROBE' ssh -i /tmp/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p '${TARGET_SSH_PORT:-2222}' -l root host.docker.internal 'sudo doveadm dsync-server -u $MAILBOX_PROBE'"
 }
 
-MYSQL_SOURCE_HOST="127.0.0.1"
-MYSQL_TARGET_HOST="127.0.0.1"
-MYSQL_TARGET_PORT="${TARGET_DB_PORT:-33062}"
 if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
 	SOURCE_API_URL="${SOURCE_API_URL/127.0.0.1/host.docker.internal}"
 	TARGET_API_URL="${TARGET_API_URL/127.0.0.1/host.docker.internal}"
-	MYSQL_SOURCE_HOST="host.docker.internal"
-	MYSQL_TARGET_HOST="host.docker.internal"
 fi
 
 mkdir -p "$TESTING_DIR/.tmp"
@@ -106,8 +101,6 @@ target_owner_user = "www-data"
 target_owner_group = "www-data"
 
 [mysql]
-source_dump_args = ["-h${MYSQL_SOURCE_HOST}", "-P${SOURCE_DB_PORT:-33061}", "-u${SOURCE_DB_ROOT_USER:-root}", "-p${SOURCE_DB_ROOT_PASSWORD:-source-root}"]
-target_import_args = ["-h${MYSQL_TARGET_HOST}", "-P${MYSQL_TARGET_PORT}", "-u${TARGET_DB_ROOT_USER:-root}", "-p${TARGET_DB_ROOT_PASSWORD:-target-root}"]
 source_panel_database = "${SOURCE_DB_NAME:-froxlor}"
 target_panel_database = "${TARGET_DB_NAME:-froxlor}"
 
@@ -139,7 +132,7 @@ wait_api "${TARGET_API_URL}"
 seed_mail_probe
 
 docker compose exec -T source-froxlor sh -lc \
-	"PYTHONPATH=/workspace uv run --no-project --with requests /workspace/testing/bootstrap/run_migration_apply.py \
+	"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko /workspace/testing/bootstrap/run_migration_apply.py \
 	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
 	--customer custalpha \
 	--customer custgamma"
@@ -147,7 +140,7 @@ docker compose exec -T source-froxlor sh -lc \
 migrate_mail_probe_real
 
 docker compose exec -T source-froxlor sh -lc \
-	"PYTHONPATH=/workspace uv run --no-project --with requests python3 -m froxlor_migrator.verify_migration \
+	"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko python3 -m froxlor_migrator.verify_migration \
 	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
 	--customer custalpha \
 	--customer custgamma"

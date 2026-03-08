@@ -54,8 +54,6 @@ class PathsConfig:
 
 @dataclass(frozen=True)
 class MysqlConfig:
-    source_dump_args: list[str]
-    target_import_args: list[str]
     source_panel_database: str = "froxlor"
     target_panel_database: str = "froxlor"
 
@@ -135,8 +133,6 @@ def load_config(path: str | Path) -> AppConfig:
         target_web_root=_must(paths, "target_web_root"),
     )
     mysql_cfg = MysqlConfig(
-        source_dump_args=list(mysql.get("source_dump_args", [])),
-        target_import_args=list(mysql.get("target_import_args", [])),
         source_panel_database=str(mysql.get("source_panel_database", "froxlor")),
         target_panel_database=str(mysql.get("target_panel_database", "froxlor")),
     )

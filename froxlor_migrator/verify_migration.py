@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import argparse
-import shlex
-import subprocess
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
+from .froxlor_mysql import (
+    connect_kwargs_from_credentials,
+    extract_sql_root_credentials,
+    froxlor_userdata_paths,
+    load_local_sql_credentials,
+)
+from .mysql_driver import query as mysql_query
+from .mysql_tunnel import open_ssh_tunnel
+from .ssh_driver import SshDriver
 from .util import as_bool, as_int, pick
 
 
@@ -495,37 +504,41 @@ def _is_custom_zone_record(row: dict[str, Any]) -> bool:
     return True
 
 
-def _run_mysql_query_local(mysql_cmd: str, mysql_args: list[str], database: str, sql: str) -> list[list[str]]:
-    command = [*shlex.split(mysql_cmd), *mysql_args, database, "-N", "-B", "-e", sql]
-    completed = subprocess.run(command, capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or "mysql query failed")
-    rows: list[list[str]] = []
-    for line in completed.stdout.splitlines():
-        rows.append(line.split("\t"))
-    return rows
+def _run_mysql_query_local(connect_kwargs: dict[str, Any], database: str, sql: str) -> list[list[str]]:
+    return mysql_query(connect_kwargs, database, sql)
 
 
-def _run_mysql_query_target_via_ssh(config, sql: str) -> list[list[str]]:
-    mysql = shlex.quote(config.commands.mysql)
-    target_args = " ".join(shlex.quote(arg) for arg in config.mysql.target_import_args)
-    panel_db = shlex.quote(config.mysql.target_panel_database)
-    ssh = config.commands.ssh
-    options = []
-    if not config.ssh.strict_host_key_checking:
-        options.append("-o StrictHostKeyChecking=no")
-        options.append("-o UserKnownHostsFile=/dev/null")
-    options.append(f"-p {config.ssh.port}")
-    ssh_prefix = f"{ssh} {' '.join(options)} -l {shlex.quote(config.ssh.user)} {shlex.quote(config.ssh.host)}"
-    remote_cmd = f"{mysql} {target_args} {panel_db} -N -B -e {shlex.quote(sql)}"
-    command = f"{ssh_prefix} {shlex.quote(remote_cmd)}"
-    completed = subprocess.run(["bash", "-o", "pipefail", "-c", command], capture_output=True, text=True)
-    if completed.returncode != 0:
-        raise RuntimeError(completed.stderr.strip() or "target mysql query failed")
-    rows: list[list[str]] = []
-    for line in completed.stdout.splitlines():
-        rows.append(line.split("\t"))
-    return rows
+@contextmanager
+def _target_connect_kwargs_via_ssh(config) -> Iterator[dict[str, Any]]:
+    ssh = SshDriver(config)
+    try:
+        target_creds = None
+        for path in froxlor_userdata_paths():
+            try:
+                content = ssh.read_file(path)
+            except Exception:
+                continue
+            target_creds = extract_sql_root_credentials(content)
+            if target_creds:
+                break
+        if not target_creds:
+            raise RuntimeError("Could not parse target sql_root credentials from froxlor userdata files via SSH")
+        kwargs = connect_kwargs_from_credentials(target_creds)
+        remote_host = str(kwargs.get("host", "localhost"))
+        remote_port = int(kwargs.get("port", 3306))
+        with open_ssh_tunnel(ssh.transport(), remote_host, remote_port) as (_, local_port):
+            tunneled = dict(kwargs)
+            tunneled.pop("unix_socket", None)
+            tunneled["host"] = "127.0.0.1"
+            tunneled["port"] = local_port
+            yield tunneled
+    finally:
+        ssh.close()
+
+
+def _run_mysql_query_target(config, sql: str) -> list[list[str]]:
+    with _target_connect_kwargs_via_ssh(config) as connect_kwargs:
+        return mysql_query(connect_kwargs, config.mysql.target_panel_database, sql)
 
 
 def _load_redirect_map_source(config, customer_id: int) -> dict[str, tuple[str, int]]:
@@ -537,8 +550,7 @@ def _load_redirect_map_source(config, customer_id: int) -> dict[str, tuple[str, 
         f"WHERE d.customerid={customer_id} AND d.aliasdomain IS NOT NULL"
     )
     rows = _run_mysql_query_local(
-        config.commands.mysql,
-        config.mysql.source_dump_args,
+        connect_kwargs_from_credentials(load_local_sql_credentials(froxlor_userdata_paths())),
         config.mysql.source_panel_database,
         sql,
     )
@@ -561,7 +573,7 @@ def _load_redirect_map_target(config, customer_id: int) -> dict[str, tuple[str, 
         "LEFT JOIN domain_redirect_codes drc ON drc.did=d.id "
         f"WHERE d.customerid={customer_id} AND d.aliasdomain IS NOT NULL"
     )
-    rows = _run_mysql_query_target_via_ssh(config, sql)
+    rows = _run_mysql_query_target(config, sql)
     result: dict[str, tuple[str, int]] = {}
     for row in rows:
         if len(row) < 3:

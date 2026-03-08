@@ -16,9 +16,9 @@ What it does:
 - Enforces identical source->target database names for migrated databases to preserve matching DB login names
 - Runs on the source (old) server
 - Transfers payload data over SSH to target:
-  - files via `tar -cf - --preserve-permissions --preserve-owner | pzstd -3 | ssh ... pzstd -d | tar -xf --preserve-permissions --preserve-owner` (uses pigz as fallback)
-  - SQL via `mysqldump | ssh ... mysql`
-  - mail via `sudo doveadm backup ... ssh ... sudo doveadm dsync-server ...`
+  - files via `tar | ssh tar` stream (prefers `pzstd`, then `pigz`, then uncompressed fallback)
+  - SQL via `mysqldump` export + remote `mysql` restore
+  - mail via `sudo doveadm backup ... ssh ... sudo doveadm dsync-server ...` (doveadm transport)
 - Databases are listed separately and selected manually
 - Supports full-customer mode (all domains, files, databases, mailboxes, settings)
 - Supports interactive source->target IP/port mapping for domains; if no mapping is provided, target Froxlor defaults are used
@@ -38,11 +38,20 @@ Fill `config.toml` and/or export environment variables used in it.
 
 The following tools must be installed on both source and target hosts:
 
-- `tar` - for file archiving
-- `pzstd` (recommended) or `pigz` (fallback) - for parallel compression during file transfers
-- `mysqldump` and `mysql` - for database migration
+- `mysqldump` - for source database export
+- `mysql` - for target database restore
 - `doveadm` - for mail migration
 - SSH access with appropriate permissions
+- Python deps: `paramiko` (SSH, auth via ssh-agent / key) and `pymysql` (panel SQL/query)
+- Optional for faster file transfer: `pzstd` or `pigz` on both sides
+
+MySQL credentials are discovered automatically from Froxlor userdata files (`userdata.conf` / `userdata.inc.php`) on source and target.  
+Only panel/metadata SQL operations use PyMySQL; database payload migration uses `mysqldump` + `mysql`.
+
+Paramiko authentication order is:
+1. SSH agent (`SSH_AUTH_SOCK`)
+2. Local key discovery (`~/.ssh`)
+3. Explicit identity file from `[commands].ssh` (for `-i ...`)
 
 ## Run
 

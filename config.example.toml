@@ -21,10 +21,6 @@ source_transfer_root = "/var/customers/webs"
 target_web_root = "/var/customers/webs"
 
 [mysql]
-# Optional extra args, e.g. ["--defaults-extra-file=/root/.my.cnf"]
-source_dump_args = []
-# Optional remote args, e.g. ["--defaults-extra-file=/root/.my.cnf"]
-target_import_args = []
 source_panel_database = "froxlor"
 target_panel_database = "froxlor"
 

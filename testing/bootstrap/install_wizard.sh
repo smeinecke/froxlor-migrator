@@ -46,7 +46,7 @@ configure_services() {
 	cli="$(resolve_cli_path "$service")"
 
 	local distro
-	distro="${FROXLOR_DISTRIBUTION:-bookworm}"
+	distro="${FROXLOR_DISTRIBUTION:-trixie}"
 	local webserver
 	webserver="${FROXLOR_WEBSERVER:-apache24}"
 

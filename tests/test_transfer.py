@@ -24,7 +24,7 @@ def _config(manifest_dir: str) -> AppConfig:
         target=ApiConfig(api_url="https://target.invalid/api.php", api_key="k", api_secret="s"),
         ssh=SshConfig(host="example.invalid", user="root", port=22, strict_host_key_checking=True),
         paths=PathsConfig(source_web_root="/src", source_transfer_root="/src", target_web_root="/dst"),
-        mysql=MysqlConfig(source_dump_args=[], target_import_args=[]),
+        mysql=MysqlConfig(source_panel_database="froxlor", target_panel_database="froxlor"),
         commands=CommandsConfig(),
         behavior=BehaviorConfig(),
         output=OutputConfig(manifest_dir=manifest_dir),
@@ -45,23 +45,32 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertIn("boom", error_events[0].get("stderr", ""))
             self.assertEqual(64, int(error_events[0].get("returncode", 0)))
 
-    def test_transfer_files_builds_remote_pipeline_with_tar_as_pipe_consumer(self) -> None:
+    def test_transfer_files_uses_tar_over_ssh(self) -> None:
         class CaptureRunner(TransferRunner):
             def __init__(self, *args, **kwargs):
                 super().__init__(*args, **kwargs)
-                self.last_command = ""
+                self.commands: list[str] = []
 
-            def _get_compression_command(self) -> tuple[str, str]:
-                return "pzstd -3", "pzstd -d"
-
-            def run(self, command: str, check: bool = True):
-                self.last_command = command
+            def run(self, command: str, check: bool = True):  # noqa: ARG002
+                self.commands.append(command)
                 return None
+
+            def _command_available(self, command: str) -> bool:  # noqa: ARG002
+                return False
+
+            def _remote_command_available(self, command: str) -> bool:  # noqa: ARG002
+                return False
 
         with tempfile.TemporaryDirectory() as tmpdir:
             runner = CaptureRunner(config=_config(tmpdir), dry_run=False, manifest_name="test")
-            runner.transfer_files("/src/site", "/dst/site")
-            self.assertIn("mkdir -p /dst/site && pzstd -d | tar -xf - -C /dst/site", runner.last_command)
+            source_dir = Path(tmpdir) / "src"
+            source_dir.mkdir()
+            (source_dir / "index.txt").write_text("hello", encoding="utf-8")
+            runner.transfer_files(str(source_dir), "/dst/site")
+            self.assertEqual(1, len(runner.commands))
+            self.assertIn("tar -C", runner.commands[0])
+            self.assertIn("| ssh ", runner.commands[0])
+            self.assertIn("mkdir -p /dst/site", runner.commands[0])
 
 
 if __name__ == "__main__":

@@ -22,8 +22,6 @@ target_owner_user = "www-data"
 target_owner_group = "www-data"
 
 [mysql]
-source_dump_args = ["-h127.0.0.1", "-P33061", "-uroot", "-psource-root"]
-target_import_args = ["-htarget-db", "-P3306", "-uroot", "-ptarget-root"]
 source_panel_database = "froxlor"
 target_panel_database = "froxlor"
 
