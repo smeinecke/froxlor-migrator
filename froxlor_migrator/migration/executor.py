@@ -35,11 +35,15 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
 
         step = 0
 
+        def _status(status: str) -> None:
+            self._emit_progress(step, total_steps, status)
+
         def _advance(status: str) -> None:
             nonlocal step
             step += 1
             self._emit_progress(step, total_steps, status)
 
+        _status("Running preflight checks")
         self.preflight(selection)
         _advance("Preflight checks")
         if self.runner.dry_run:
@@ -47,9 +51,11 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             _advance("Dry-run completed")
             return MigrationContext(target_customer_id=target_customer_id, source_to_target_db={})
 
+        _status("Synchronizing customer")
         target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer)
         _advance("Customer synchronized")
         customer_login = str(pick(selection.customer, "loginname", "login", default="")).strip()
+        _status("Preparing IP mapping")
         ip_value_mapping = self._build_ip_value_mapping(selection.domains, selection.ip_mapping)
         _advance("IP mapping prepared")
 
@@ -57,6 +63,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         if selection.target_customer:
             target_customer_login = self._customer_login(selection.target_customer)
 
+        _status("Synchronizing domains")
         self._ensure_domains(
             target_customer_id,
             selection.domains,
@@ -66,32 +73,43 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             customer_login,
         )
         _advance("Domains synchronized")
+        _status("Synchronizing domain redirects")
         self._sync_domain_redirects(selection.domains)
         _advance("Domain redirects synchronized")
         if selection.include_subdomains:
+            _status("Synchronizing subdomains")
             self._ensure_subdomains(target_customer_id, selection.subdomains, selection.php_setting_map)
             _advance("Subdomains synchronized")
         if selection.include_certificates:
+            _status("Synchronizing certificates")
             self._migrate_domain_certificates(selection.domains)
             _advance("Certificates synchronized")
+        _status("Synchronizing FTP accounts")
         self._ensure_ftp_accounts(target_customer_id, selection.ftp_accounts, customer_login)
         _advance("FTP accounts synchronized")
+        _status("Synchronizing SSH keys")
         self._ensure_ssh_keys(target_customer_id, selection.ssh_keys)
         _advance("SSH keys synchronized")
+        _status("Synchronizing data dumps")
         self._ensure_data_dumps(target_customer_id, selection.data_dumps)
         _advance("Data dumps synchronized")
+        _status("Synchronizing directory options")
         self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login)
         _advance("Directory options synchronized")
+        _status("Synchronizing directory protections")
         self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login)
         _advance("Directory protections synchronized")
         if selection.include_domain_zones:
+            _status("Synchronizing domain zones")
             self._ensure_domain_zones(selection.domain_zones, ip_value_mapping)
             _advance("Domain zones synchronized")
+        _status("Synchronizing Let's Encrypt flags")
         self._enable_letsencrypt_after_dns(selection.domains)
         _advance("Let's Encrypt flags synchronized")
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:
+            _status("Synchronizing MySQL prefix")
             self._sync_target_mysql_prefix_setting()
             _advance("MySQL prefix synchronized")
             known_before = {
@@ -108,22 +126,28 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                     )
                 known_before.add(target_name)
                 db_map[source_name] = target_name
+                _status(f"Transferring database: {source_name}")
                 self._transfer_database_with_defaults(source_name, target_name)
                 _advance(f"Database migrated: {source_name}")
+            _status("Synchronizing database login hashes")
             self._sync_database_login_hashes(db_map)
             _advance("Database login hashes synchronized")
 
         transferable_mailboxes: list[str] = []
         if selection.mailboxes:
+            _status("Synchronizing mailbox objects")
             transferable_mailboxes = self._ensure_mailboxes(target_customer_id, selection.mailboxes)
             _advance("Mailboxes synchronized")
         if selection.include_forwarders:
+            _status("Synchronizing mail forwarders")
             self._ensure_email_forwarders(target_customer_id, selection.email_forwarders)
             _advance("Mail forwarders synchronized")
         if selection.include_sender_aliases:
+            _status("Synchronizing sender aliases")
             self._ensure_email_sender_aliases(target_customer_id, selection.email_senders)
             _advance("Sender aliases synchronized")
         if selection.include_password_sync:
+            _status("Synchronizing password hashes")
             self._sync_password_hashes(
                 target_customer_id,
                 selection.customer,
@@ -138,12 +162,15 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             for domain in selection.domains:
                 source_docroot = self._resolve_source_docroot(domain, customer_login)
                 target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
+                _status(f"Transferring domain data: {self._domain_name(domain)}")
                 self.runner.transfer_files(source_docroot, target_docroot)
                 self._fix_transferred_docroot_ownership(target_docroot, customer_login, target_customer_login)
                 _advance(f"Files transferred: {self._domain_name(domain)}")
 
         if selection.include_mail and selection.mailboxes:
+            _status("Transferring mailbox content")
             for mailbox in transferable_mailboxes:
+                _status(f"Transferring mailbox content: {mailbox}")
                 self.runner.transfer_mailbox(mailbox)
             _advance("Mailbox content transferred")
 
