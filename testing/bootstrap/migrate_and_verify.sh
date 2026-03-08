@@ -99,7 +99,7 @@ port = ${TARGET_SSH_PORT:-2222}
 strict_host_key_checking = false
 
 [paths]
-source_web_root = "/data/customers"
+source_web_root = "/var/customers/webs"
 source_transfer_root = "/data/customers"
 target_web_root = "/data/customers"
 target_owner_user = "www-data"

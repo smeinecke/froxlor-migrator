@@ -119,7 +119,8 @@ Point `config.toml` to:
 
 - source API: `http://127.0.0.1:8081/api.php`
 - target API: `http://127.0.0.1:8082/api.php`
-- source web root: `/data/customers`
+- source web root: `/var/customers/webs`
+- source transfer root: `./testing/data/source/customers` (or `/data/customers` when running inside `source-froxlor`)
 - target web root: `/data/customers`
 
 For local host-run tests, use SSH target `127.0.0.1` and `TARGET_SSH_PORT` with key `testing/ssh/id_ed25519`.

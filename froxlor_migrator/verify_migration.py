@@ -54,6 +54,32 @@ def _data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
     )
 
 
+def _docroot_in_any_root(docroot: str, roots: list[str]) -> bool:
+    value = docroot.strip()
+    for root in roots:
+        normalized = root.rstrip("/")
+        if not normalized:
+            continue
+        if value == normalized or value.startswith(normalized + "/"):
+            return True
+    return False
+
+
+def _expected_target_docroot(source_docroot: str, source_roots: list[str], target_root: str) -> str:
+    value = source_docroot.strip()
+    target_base = target_root.rstrip("/")
+    for root in source_roots:
+        normalized = root.rstrip("/")
+        if not normalized:
+            continue
+        if value == normalized:
+            return target_base
+        if value.startswith(normalized + "/"):
+            suffix = value[len(normalized) :]
+            return target_base + suffix
+    return value
+
+
 def _normalize_customer_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -78,12 +104,19 @@ def _compare_domain(
     target_row: dict[str, Any],
     source_php_map: dict[int, str],
     target_php_map: dict[int, str],
+    source_roots: list[str],
+    target_root: str,
 ) -> list[str]:
     errors: list[str] = []
+    expected_documentroot = _expected_target_docroot(
+        str(pick(source_row, "documentroot", default="")),
+        source_roots,
+        target_root,
+    )
     checks = [
         (
             "documentroot",
-            str(pick(source_row, "documentroot", default="")),
+            expected_documentroot,
             str(pick(target_row, "documentroot", default="")),
         ),
         (
@@ -599,8 +632,11 @@ def main() -> int:
         dst_domains = {_domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)}
         src_subdomains = {_subdomain_name(x): x for x in source.list_subdomains(customerid=src_id, loginname=login)}
         dst_subdomains = {_subdomain_name(x): x for x in target.list_subdomains(customerid=dst_id, loginname=login)}
+        source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
         migratable_domain_names = {
-            name for name, row in src_domains.items() if str(pick(row, "documentroot", default="")).startswith(config.paths.source_web_root.rstrip("/") + "/")
+            name
+            for name, row in src_domains.items()
+            if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
         }
 
         src_mails = {_mail_name(x): x for x in source.list_emails(customerid=src_id, loginname=login)}
@@ -662,15 +698,25 @@ def main() -> int:
 
         for domain in sorted(src_domains):
             source_docroot = str(pick(src_domains[domain], "documentroot", default=""))
-            if source_docroot and not source_docroot.startswith(config.paths.source_web_root.rstrip("/") + "/"):
-                print(f"SKIP customer={login} domain={domain}: outside source_web_root ({source_docroot})")
+            if source_docroot and not _docroot_in_any_root(source_docroot, source_roots):
+                print(
+                    f"SKIP customer={login} domain={domain}: outside source roots "
+                    f"({config.paths.source_web_root}, {config.paths.source_transfer_root}) ({source_docroot})"
+                )
                 continue
             if domain not in dst_domains:
                 print(f"FAIL customer={login} domain={domain}: missing on target")
                 failures += 1
                 customer_failed = True
                 continue
-            errs = _compare_domain(src_domains[domain], dst_domains[domain], source_php_map, target_php_map)
+            errs = _compare_domain(
+                src_domains[domain],
+                dst_domains[domain],
+                source_php_map,
+                target_php_map,
+                source_roots,
+                config.paths.target_web_root,
+            )
             if errs:
                 print(f"FAIL customer={login} domain={domain}: {'; '.join(errs)}")
                 failures += 1

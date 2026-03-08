@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -39,6 +40,12 @@ class TransferRunner:
         })
         self.manifest_path.write_text(json.dumps(self.events, indent=2), encoding="utf-8")
 
+    @staticmethod
+    def _truncate_output(value: str, limit: int = 16000) -> str:
+        if len(value) <= limit:
+            return value
+        return value[:limit] + "\n...[truncated]..."
+
     def run(self, command: str, check: bool = True) -> CommandResult:
         started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run})
@@ -46,7 +53,15 @@ class TransferRunner:
             finished = datetime.now(timezone.utc).isoformat()
             return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
 
-        completed = subprocess.run(["bash", "-o", "pipefail", "-c", command])
+        completed = subprocess.run(
+            ["bash", "-o", "pipefail", "-c", command],
+            capture_output=True,
+            text=True,
+        )
+        if completed.stdout:
+            print(completed.stdout, end="")
+        if completed.stderr:
+            print(completed.stderr, end="", file=sys.stderr)
         finished = datetime.now(timezone.utc).isoformat()
         result = CommandResult(
             command=command,
@@ -54,8 +69,25 @@ class TransferRunner:
             started_at=started,
             finished_at=finished,
         )
+        self._log_event(
+            "result",
+            {
+                "command": command,
+                "returncode": completed.returncode,
+                "stdout": self._truncate_output(completed.stdout or ""),
+                "stderr": self._truncate_output(completed.stderr or ""),
+            },
+        )
         if check and completed.returncode != 0:
-            self._log_event("error", {"command": command, "returncode": completed.returncode})
+            self._log_event(
+                "error",
+                {
+                    "command": command,
+                    "returncode": completed.returncode,
+                    "stdout": self._truncate_output(completed.stdout or ""),
+                    "stderr": self._truncate_output(completed.stderr or ""),
+                },
+            )
             raise TransferError(f"Command failed ({completed.returncode}): {command}")
         return result
 

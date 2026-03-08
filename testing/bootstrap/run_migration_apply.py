@@ -21,6 +21,13 @@ def _domain_in_source_root(domain: dict, source_root: str) -> bool:
     return bool(docroot.startswith(root + "/") or docroot == root)
 
 
+def _domain_in_any_source_root(domain: dict, roots: list[str]) -> bool:
+    for root in roots:
+        if root.strip() and _domain_in_source_root(domain, root):
+            return True
+    return False
+
+
 def _php_setting_map_by_name(
     source_domains: list[dict],
     source_php_settings: list[dict],
@@ -71,7 +78,8 @@ def _migrate_customer(config_path: str, customer_login: str, include_mail: bool)
     customer_id = as_int(pick(customer, "customerid", "id", default=0))
     login = str(pick(customer, "loginname", "login", default="")).strip()
     domains = source.list_domains(customerid=customer_id if customer_id else None, loginname=login or None)
-    selected_domains = [row for row in domains if _domain_in_source_root(row, config.paths.source_web_root)]
+    source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
+    selected_domains = [row for row in domains if _domain_in_any_source_root(row, source_roots)]
     selected_domain_names = {str(pick(row, "domain", "domainname", default="")).strip().lower() for row in selected_domains}
 
     subdomains = source.list_subdomains(customerid=customer_id if customer_id else None, loginname=login or None)
