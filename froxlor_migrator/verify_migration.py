@@ -633,11 +633,7 @@ def main() -> int:
         src_subdomains = {_subdomain_name(x): x for x in source.list_subdomains(customerid=src_id, loginname=login)}
         dst_subdomains = {_subdomain_name(x): x for x in target.list_subdomains(customerid=dst_id, loginname=login)}
         source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
-        migratable_domain_names = {
-            name
-            for name, row in src_domains.items()
-            if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
-        }
+        migratable_domain_names = {name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)}
 
         src_mails = {_mail_name(x): x for x in source.list_emails(customerid=src_id, loginname=login)}
         dst_mails = {_mail_name(x): x for x in target.list_emails(customerid=dst_id, loginname=login)}

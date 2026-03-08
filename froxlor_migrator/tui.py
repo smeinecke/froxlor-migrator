@@ -257,6 +257,7 @@ def run_app() -> None:
     parser = argparse.ArgumentParser(description="Froxlor full migration helper")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
     parser.add_argument("--apply", action="store_true", help="Execute changes (default is dry-run)")
+    parser.add_argument("--skip-subdomains", action="store_true", help="Skip subdomain creation/update on target")
     parser.add_argument(
         "--skip-database-name-validation",
         action="store_true",
@@ -468,7 +469,7 @@ def run_app() -> None:
     plan.add_column("Count", justify="right")
     plan.add_row("Customer", "1")
     plan.add_row("Domains", str(len(selected_domains)))
-    plan.add_row("Subdomains", str(len(selected_subdomains)))
+    plan.add_row("Subdomains", str(0 if args.skip_subdomains else len(selected_subdomains)))
     plan.add_row("Databases", str(len(selected_databases) if include_databases else 0))
     plan.add_row("Mailboxes", str(len(selected_mailboxes) if include_mail else 0))
     plan.add_row("Mail forwarders", str(len(selected_forwarders)))
@@ -513,6 +514,7 @@ def run_app() -> None:
         include_files=include_files,
         include_databases=include_databases,
         include_mail=include_mail,
+        include_subdomains=not args.skip_subdomains,
         validate_database_names=not args.skip_database_name_validation,
         php_setting_map=php_setting_map,
         ip_mapping=ip_mapping,

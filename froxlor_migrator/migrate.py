@@ -39,6 +39,7 @@ class Selection:
     include_files: bool
     include_databases: bool
     include_mail: bool
+    include_subdomains: bool
     validate_database_names: bool
     php_setting_map: dict[int, int]
     ip_mapping: dict[int, int]
@@ -86,7 +87,7 @@ class Migrator:
         source_email = str(pick(source_customer, "email", default="")).strip().lower()
 
         # Debug: Print target server info
-        if hasattr(self.target, 'api_url'):
+        if hasattr(self.target, "api_url"):
             print(f"DEBUG: Searching for customer on target server: {self.target.api_url}")
         print(f"DEBUG: Looking for source_login={source_login}, source_email={source_email}")
 
@@ -343,12 +344,7 @@ class Migrator:
         remote_path = f"/tmp/froxlor-migrator-target-mysql-{random_password(12)}.cnf"
         content = self._build_mysql_defaults_content(creds)
         heredoc = "MYSQLLOGINEOF"
-        remote_write_cmd = (
-            f"umask 077; cat > {shlex.quote(remote_path)} <<'{heredoc}'\n"
-            f"{content}"
-            f"{heredoc}\n"
-            f"chmod 600 {shlex.quote(remote_path)}"
-        )
+        remote_write_cmd = f"umask 077; cat > {shlex.quote(remote_path)} <<'{heredoc}'\n{content}{heredoc}\nchmod 600 {shlex.quote(remote_path)}"
         write_completed = subprocess.run(
             ["bash", "-o", "pipefail", "-c", f"{ssh_prefix} {shlex.quote(remote_write_cmd)}"],
             capture_output=True,
@@ -374,7 +370,7 @@ class Migrator:
         defaults_file = self._ensure_source_mysql_defaults_file()
         command = [
             *shlex.split(self.config.commands.mysql),
-            *( [f"--defaults-file={defaults_file}"] if defaults_file else [] ),
+            *([f"--defaults-file={defaults_file}"] if defaults_file else []),
             *self.config.mysql.source_dump_args,
             database,
             "-N",
@@ -430,11 +426,7 @@ class Migrator:
         self._exec_target_panel_sql(update_sql)
 
     def _source_mysql_prefix_setting(self) -> str:
-        rows = self._run_source_panel_query(
-            "SELECT value FROM panel_settings "
-            "WHERE settinggroup='customer' AND varname='mysqlprefix' "
-            "LIMIT 1;"
-        )
+        rows = self._run_source_panel_query("SELECT value FROM panel_settings WHERE settinggroup='customer' AND varname='mysqlprefix' LIMIT 1;")
         if not rows or not rows[0]:
             return ""
         return str(rows[0][0]).strip()
@@ -443,11 +435,7 @@ class Migrator:
         value = self._source_mysql_prefix_setting()
         if not value:
             return
-        sql = (
-            "UPDATE panel_settings "
-            f"SET value={self._sql_utf8_literal(value)} "
-            "WHERE settinggroup='customer' AND varname='mysqlprefix';"
-        )
+        sql = f"UPDATE panel_settings SET value={self._sql_utf8_literal(value)} WHERE settinggroup='customer' AND varname='mysqlprefix';"
         self._exec_target_panel_sql(sql)
 
     def _load_source_domain_redirects(self, domains: list[dict[str, Any]]) -> list[tuple[str, str, int]]:
@@ -619,6 +607,7 @@ class Migrator:
             target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
             source_php_setting = as_int(pick(domain, "phpsettingid", default=0))
             mapped_php_setting = php_setting_map.get(source_php_setting, source_php_setting)
+            source_server_alias = as_int(pick(domain, "wwwserveralias", "selectserveralias", default=0))
             mapped_ip_ids: list[int] = []
             mapped_ssl_ip_ids: list[int] = []
             for ip_row in pick(domain, "ipsandports", default=[]) or []:
@@ -660,7 +649,8 @@ class Migrator:
                 "honorcipherorder": bool(as_int(pick(domain, "ssl_honorcipherorder", "honorcipherorder", default=0))),
                 "sessiontickets": bool(as_int(pick(domain, "ssl_sessiontickets", "sessiontickets", default=1))),
                 "description": str(pick(domain, "description", default="")),
-                "selectserveralias": as_int(pick(domain, "wwwserveralias", "selectserveralias", default=0)),
+                # Keep server-alias mode explicit during both add and update.
+                "selectserveralias": source_server_alias,
                 "subcanemaildomain": as_int(pick(domain, "subcanemaildomain", default=0)),
                 "speciallogfile": bool(as_int(pick(domain, "speciallogfile", default=0))),
                 "alias": as_int(pick(domain, "alias", default=0)),
@@ -872,6 +862,11 @@ class Migrator:
                     "deactivated",
                     int(bool(base_payload["deactivated"])),
                     as_int(pick(target_domain, "deactivated", default=0)),
+                ),
+                (
+                    "selectserveralias",
+                    as_int(base_payload["selectserveralias"]),
+                    as_int(pick(target_domain, "wwwserveralias", "selectserveralias", default=0)),
                 ),
             ]
             for field_name, expected, actual in comparisons:
@@ -1754,7 +1749,8 @@ class Migrator:
             customer_login,
         )
         self._sync_domain_redirects(selection.domains)
-        self._ensure_subdomains(target_customer_id, selection.subdomains, selection.php_setting_map)
+        if selection.include_subdomains:
+            self._ensure_subdomains(target_customer_id, selection.subdomains, selection.php_setting_map)
         self._migrate_domain_certificates(selection.domains)
         self._ensure_ftp_accounts(target_customer_id, selection.ftp_accounts, customer_login)
         self._ensure_ssh_keys(target_customer_id, selection.ssh_keys)
@@ -1804,8 +1800,7 @@ class Migrator:
                 if target_customer_login and target_customer_login != customer_login:
                     if not self.runner.dry_run:
                         chown_cmd = (
-                            f"find {shlex.quote(target_docroot)} -user {shlex.quote(customer_login)} "
-                            f"-exec chown -h {shlex.quote(target_customer_login)} {{}} +"
+                            f"find {shlex.quote(target_docroot)} -user {shlex.quote(customer_login)} -exec chown -h {shlex.quote(target_customer_login)} {{}} +"
                         )
                         self.runner.run(f"{self._ssh_prefix()} '{chown_cmd}'")
 

@@ -41,7 +41,7 @@ class FroxlorClient:
                 data=json.dumps(body),
                 timeout=self.timeout_seconds,
             )
-        except RequestException as exc:
+        except RequestException:
             # Network-level failures can be transient; retry once.
             time.sleep(0.5)
             try:
@@ -64,9 +64,7 @@ class FroxlorClient:
             data = response.json()
         except RequestsJSONDecodeError as exc:
             snippet = response.text[:400]
-            raise FroxlorApiError(
-                f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}"
-            ) from exc
+            raise FroxlorApiError(f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}") from exc
 
         if data.get("status") and int(data.get("status", 200)) >= 400:
             raise FroxlorApiError(f"API {command} failed: {data.get('status_message', 'unknown error')}")

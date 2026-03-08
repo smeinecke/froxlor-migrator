@@ -187,22 +187,15 @@ class TransferRunner:
         # Get compression commands
         compress_cmd, decompress_cmd = self._get_compression_command()
 
-        remote_cmd = (
-            f"mkdir -p {shlex.quote(target_dir)}"
-            f" && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
-        )
+        remote_cmd = f"mkdir -p {shlex.quote(target_dir)} && {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
         if decompress_cmd == "cat":
             remote_pipeline = remote_cmd
         else:
             remote_pipeline = (
-                f"mkdir -p {shlex.quote(target_dir)}"
-                f" && {decompress_cmd} | {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
+                f"mkdir -p {shlex.quote(target_dir)} && {decompress_cmd} | {shlex.quote(self.config.commands.tar)} -xf - -C {shlex.quote(target_dir)}"
             )
 
-        command = (
-            f"{tar} -cf - -C {shlex.quote(source_dir)} ."
-            f" | {compress_cmd} | {ssh_prefix} {shlex.quote(remote_pipeline)}"
-        )
+        command = f"{tar} -cf - -C {shlex.quote(source_dir)} . | {compress_cmd} | {ssh_prefix} {shlex.quote(remote_pipeline)}"
         self.run(command)
 
     def transfer_database(self, source_db: str, target_db: str) -> None:
