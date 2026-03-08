@@ -23,12 +23,15 @@ class CommandResult:
     returncode: int
     started_at: str
     finished_at: str
+    stdout: str = ""
+    stderr: str = ""
 
 
 class TransferRunner:
-    def __init__(self, config: AppConfig, dry_run: bool, manifest_name: str) -> None:
+    def __init__(self, config: AppConfig, dry_run: bool, manifest_name: str, debug: bool = False) -> None:
         self.config = config
         self.dry_run = dry_run
+        self.debug = debug
         self._ssh = SshDriver(config)
         self._file_transfer_codec: tuple[str, str] | None = None
         manifest_dir = ensure_dir(config.output.manifest_dir)
@@ -42,6 +45,11 @@ class TransferRunner:
             **payload,
         })
         self.manifest_path.write_text(json.dumps(self.events, indent=2), encoding="utf-8")
+
+    def debug_event(self, message: str, **payload: Any) -> None:
+        if not self.debug:
+            return
+        self._log_event("debug", {"message": message, **payload})
 
     @staticmethod
     def _truncate_output(value: str, limit: int = 16000) -> str:
@@ -71,6 +79,8 @@ class TransferRunner:
             returncode=completed.returncode,
             started_at=started,
             finished_at=finished,
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
         )
         self._log_event(
             "result",
@@ -241,4 +251,11 @@ class TransferRunner:
         )
         if check and completed.returncode != 0:
             raise TransferError(f"Remote command failed ({completed.returncode}): {command}")
-        return CommandResult(command=command, returncode=completed.returncode, started_at=started, finished_at=finished)
+        return CommandResult(
+            command=command,
+            returncode=completed.returncode,
+            started_at=started,
+            finished_at=finished,
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+        )

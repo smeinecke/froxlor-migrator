@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from ..api import FroxlorApiError, FroxlorClient
 from ..config import AppConfig
@@ -29,6 +30,16 @@ from .types import MigrationError, ResourceRow, Selection
 
 
 class MigratorCore:
+    def _debug(self, message: str, **payload: Any) -> None:
+        self.runner.debug_event(message, **payload)
+
+    @staticmethod
+    def _redact_connect_kwargs(connect_kwargs: dict[str, Any]) -> dict[str, Any]:
+        redacted = dict(connect_kwargs)
+        if "password" in redacted:
+            redacted["password"] = "***"
+        return redacted
+
     def _relative_customer_path(self, path: str, customer_login: str) -> str:
         cleaned = path.strip().strip("/")
         if not cleaned:
@@ -266,6 +277,13 @@ class MigratorCore:
                 found.append(creds)
         if found:
             self._target_sql_root_credentials = max(found, key=_credential_score)
+            self._debug(
+                "resolved_target_sql_root_credentials",
+                host=self._target_sql_root_credentials.get("host", ""),
+                port=self._target_sql_root_credentials.get("port", ""),
+                socket=self._target_sql_root_credentials.get("socket", ""),
+                user=self._target_sql_root_credentials.get("user", ""),
+            )
             return self._target_sql_root_credentials
         raise MigrationError("Could not parse target sql_root credentials from froxlor userdata files")
 
@@ -275,13 +293,46 @@ class MigratorCore:
         kwargs = connect_kwargs_from_credentials(creds)
         remote_host = str(kwargs.get("host", "localhost"))
         remote_port = int(kwargs.get("port", 3306))
+        self._debug(
+            "opening_target_mysql_tunnel",
+            remote_host=remote_host,
+            remote_port=remote_port,
+            has_unix_socket=bool(kwargs.get("unix_socket")),
+            user=str(kwargs.get("user", "")),
+        )
         transport = self.runner.ssh_transport()
         with open_ssh_tunnel(transport, remote_host, remote_port) as (_, local_port):
             tunneled = dict(kwargs)
             tunneled.pop("unix_socket", None)
             tunneled["host"] = "127.0.0.1"
             tunneled["port"] = local_port
+            self._debug(
+                "target_mysql_tunnel_ready",
+                local_host="127.0.0.1",
+                local_port=local_port,
+                connect_kwargs=self._redact_connect_kwargs(tunneled),
+            )
             yield tunneled
+
+    def _run_target_mysql_via_remote_cli(self, sql: str, database: str) -> str:
+        suffix = uuid4().hex[:8]
+        remote_defaults = f"/tmp/froxlor-target-sql-{suffix}.cnf"
+        remote_script = f"/tmp/froxlor-target-sql-{suffix}.sql"
+        defaults_content = mysql_defaults_content(self._target_sql_root())
+        try:
+            self.runner.write_remote_file(remote_defaults, defaults_content, mode=0o600)
+            self.runner.write_remote_file(remote_script, sql, mode=0o600)
+            cmd = (
+                f"{shlex.quote(self.config.commands.mysql)} "
+                f"--defaults-extra-file={shlex.quote(remote_defaults)} "
+                "--batch --raw --skip-column-names "
+                f"{shlex.quote(database)} < {shlex.quote(remote_script)}"
+            )
+            self._debug("target_mysql_remote_cli_execute", database=database, command=cmd)
+            result = self.runner.run_remote(cmd)
+            return result.stdout or ""
+        finally:
+            self.runner.run_remote(f"rm -f {shlex.quote(remote_defaults)} {shlex.quote(remote_script)}", check=False)
 
     def _sql_utf8_literal(self, value: str) -> str:
         if value == "":
@@ -315,17 +366,47 @@ class MigratorCore:
             with self._target_mysql_connect_kwargs() as connect_kwargs:
                 return mysql_query(connect_kwargs, database, sql)
         except Exception as exc:
-            raise MigrationError(f"Target SQL query failed: {str(exc)[:400]}") from exc
+            self._debug(
+                "target_sql_query_failed_over_tunnel",
+                database=database,
+                error=str(exc)[:400],
+            )
+            try:
+                output = self._run_target_mysql_via_remote_cli(sql, database)
+                rows: list[list[str]] = []
+                for line in output.splitlines():
+                    rows.append(line.split("\t"))
+                self._debug("target_sql_query_fallback_remote_cli_success", database=database, rows=len(rows))
+                return rows
+            except Exception as fallback_exc:
+                raise MigrationError(
+                    f"Target SQL query failed: {str(exc)[:250]} | fallback via remote mysql failed: {str(fallback_exc)[:250]}"
+                ) from fallback_exc
 
     def _run_target_panel_query(self, sql: str) -> list[list[str]]:
         return self._run_target_mysql_query(sql, self.config.mysql.target_panel_database)
 
     def _exec_target_mysql_sql(self, sql: str, database: str) -> None:
+        connect_summary: dict[str, Any] | None = None
         try:
             with self._target_mysql_connect_kwargs() as connect_kwargs:
+                connect_summary = self._redact_connect_kwargs(connect_kwargs)
                 mysql_execute(connect_kwargs, database, sql)
         except Exception as exc:
-            raise MigrationError(f"Target SQL execution failed: {str(exc)[:400]}") from exc
+            self._debug(
+                "target_sql_execution_failed_over_tunnel",
+                database=database,
+                error=str(exc)[:400],
+                connect_kwargs=connect_summary,
+            )
+            try:
+                self._run_target_mysql_via_remote_cli(sql, database)
+                self._debug("target_sql_execution_fallback_remote_cli_success", database=database)
+                return
+            except Exception as fallback_exc:
+                raise MigrationError(
+                    f"Target SQL execution failed: {str(exc)[:250]} | fallback via remote mysql failed: {str(fallback_exc)[:250]}"
+                ) from fallback_exc
 
     def _exec_target_panel_sql(self, sql: str) -> None:
         self._exec_target_mysql_sql(sql, self.config.mysql.target_panel_database)

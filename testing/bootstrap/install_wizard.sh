@@ -182,7 +182,7 @@ install_if_needed \
 	"${TARGET_DB_NAME:-froxlor}" \
 	"${TARGET_ADMIN_NAME:-Target Admin}" \
 	"${TARGET_ADMIN_USER:-admin}" \
-	"${TARGET_ADMIN_PASSWORD:-admin123!}" \
+	"${TARGET_ADMIN_PASSWORD:-admin124!}" \
 	"${TARGET_ADMIN_EMAIL:-admin-target@example.test}" \
 	"${TARGET_SERVERNAME:-target.example.test}"
 

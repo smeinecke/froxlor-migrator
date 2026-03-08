@@ -72,6 +72,18 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertIn("| ssh ", runner.commands[0])
             self.assertIn("mkdir -p /dst/site", runner.commands[0])
 
+    def test_debug_event_is_only_written_in_debug_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            disabled = TransferRunner(config=_config(tmpdir), dry_run=True, manifest_name="disabled", debug=False)
+            disabled.debug_event("hidden", foo="bar")
+            self.assertFalse((Path(tmpdir) / "disabled.json").exists())
+
+            enabled = TransferRunner(config=_config(tmpdir), dry_run=True, manifest_name="enabled", debug=True)
+            enabled.debug_event("visible", foo="bar")
+            events = json.loads((Path(tmpdir) / "enabled.json").read_text(encoding="utf-8"))
+            self.assertEqual("debug", events[-1]["kind"])
+            self.assertEqual("visible", events[-1]["message"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -222,10 +222,13 @@ def _build_replay_command(
     include_password_sync: bool,
     include_forwarders: bool,
     include_sender_aliases: bool,
+    debug: bool,
 ) -> str:
     parts: list[str] = ["uv", "run", "python", "main.py", "--config", args.config, "--non-interactive", "--yes"]
     if args.apply:
         parts.append("--apply")
+    if debug:
+        parts.append("--debug")
     if migrate_whole_customer:
         parts.append("--whole-customer")
     else:
@@ -571,6 +574,7 @@ def run_app() -> None:
     parser = argparse.ArgumentParser(description="Froxlor full migration helper")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
     parser.add_argument("--apply", action="store_true", help="Execute changes (default is dry-run)")
+    parser.add_argument("--debug", action="store_true", help="Enable verbose manifest debug tracing")
     parser.add_argument("--non-interactive", action="store_true", help="Run without prompts; use defaults and CLI selections")
     parser.add_argument("--yes", action="store_true", help="Skip final confirmation prompt and start migration")
     parser.add_argument("--source-customer", help="Source customer selector (id, login, name, or email)")
@@ -633,6 +637,8 @@ def run_app() -> None:
 
     console.print("[bold]Froxlor Migrator[/bold]")
     console.print(f"Mode: {'[yellow]dry-run[/yellow]' if dry_run else '[green]apply[/green]'}")
+    if args.debug:
+        console.print("Debug: [green]enabled[/green]")
     if args.domain_only and args.whole_customer:
         console.print("[red]Use only one of --domain-only or --whole-customer.[/red]")
         return
@@ -1023,6 +1029,7 @@ def run_app() -> None:
     plan.add_row("Sender aliases sync", "yes" if include_sender_aliases else "no")
     plan.add_row("Files transfer", "yes" if include_files else "no")
     plan.add_row("Validate DB names", "no" if args.skip_database_name_validation else "yes")
+    plan.add_row("Debug tracing", "yes" if args.debug else "no")
     plan.add_row("Dry-run", "yes" if dry_run else "no")
     console.print(plan)
 
@@ -1048,6 +1055,7 @@ def run_app() -> None:
         include_password_sync=include_password_sync,
         include_forwarders=include_forwarders,
         include_sender_aliases=include_sender_aliases,
+        debug=args.debug,
     )
     console.print("[bold]Replay command (same selection, non-interactive):[/bold]")
     console.print(replay_command)
@@ -1058,7 +1066,7 @@ def run_app() -> None:
             return
 
     manifest_name = slugify(f"{pick(selected_customer, 'loginname', 'login', default='customer')}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-    runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name)
+    runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name, debug=args.debug)
     migrator = Migrator(config=config, source=source, target=target, runner=runner)
 
     selection = Selection(

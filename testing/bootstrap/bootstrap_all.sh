@@ -127,12 +127,20 @@ fi
 echo
 echo "Server login info"
 echo "-----------------"
+source_admin_user="${SOURCE_ADMIN_USER:-admin}"
+source_admin_pass="${SOURCE_ADMIN_PASSWORD:-admin123!}"
+target_admin_user="${TARGET_ADMIN_USER:-admin}"
+target_admin_pass="${TARGET_ADMIN_PASSWORD:-admin124!}"
+
 echo "Source UI: http://127.0.0.1:${SOURCE_HTTP_PORT:-8081}"
-echo "  Admin user: ${SOURCE_ADMIN_USER:-admin}"
-echo "  Admin pass: ${SOURCE_ADMIN_PASSWORD:-admin123!}"
+echo "  Admin user (SOURCE_ADMIN_USER): ${source_admin_user}"
+echo "  Admin pass (SOURCE_ADMIN_PASSWORD): ${source_admin_pass}"
 echo "Target UI: http://127.0.0.1:${TARGET_HTTP_PORT:-8082}"
-echo "  Admin user: ${TARGET_ADMIN_USER:-admin}"
-echo "  Admin pass: ${TARGET_ADMIN_PASSWORD:-admin124!}"
+echo "  Admin user (TARGET_ADMIN_USER): ${target_admin_user}"
+echo "  Admin pass (TARGET_ADMIN_PASSWORD): ${target_admin_pass}"
+if [[ "$source_admin_pass" == "$target_admin_pass" ]]; then
+	echo "WARNING: SOURCE_ADMIN_PASSWORD and TARGET_ADMIN_PASSWORD are identical in testing/.env"
+fi
 echo "Source SSH: 127.0.0.1:${SOURCE_SSH_PORT:-2221} (key: $ROOT_DIR/ssh/id_ed25519)"
 echo "Target SSH: 127.0.0.1:${TARGET_SSH_PORT:-2222} (key: $ROOT_DIR/ssh/id_ed25519)"
 
