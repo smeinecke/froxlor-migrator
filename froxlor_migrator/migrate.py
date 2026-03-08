@@ -14,7 +14,6 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import AppConfig
 from .froxlor_mysql import (
     connect_kwargs_from_credentials,
-    extract_sql_credentials,
     extract_sql_root_credentials,
     froxlor_userdata_paths,
     load_local_sql_credentials,
@@ -239,21 +238,9 @@ class Migrator:
             return as_int(pick(existing, "customerid", "id", default=0))
         raise MigrationError("Failed to create target customer")
 
-    def _domain_name(self, domain: dict[str, Any]) -> str:
-        return str(pick(domain, "domain", "domainname", default=""))
-
-    def _database_name(self, db: dict[str, Any]) -> str:
-        return str(pick(db, "databasename", "dbname", "database", default=""))
-
-    def _email_name(self, email: dict[str, Any]) -> str:
-        return str(pick(email, "email_full", "email", "emailaddr", default=""))
-
-    def _target_domain_set(self) -> set[str]:
-        return {self._domain_name(item) for item in self.target.list_domains() if self._domain_name(item)}
-
     def _get_target_domain(self, domain_name: str) -> dict[str, Any] | None:
         for domain in self.target.list_domains():
-            if self._domain_name(domain) == domain_name:
+            if str(pick(domain, "domain", "domainname", default="")) == domain_name:
                 return domain
         return None
 
@@ -268,15 +255,6 @@ class Migrator:
             return self._source_sql_credentials
         self._source_sql_credentials = load_local_sql_credentials(froxlor_userdata_paths())
         return self._source_sql_credentials
-
-    def _extract_sql_root_credentials(self, content: str) -> dict[str, str] | None:
-        return extract_sql_root_credentials(content)
-
-    def _extract_sql_credentials(self, content: str) -> dict[str, str] | None:
-        return extract_sql_credentials(content)
-
-    def _build_mysql_defaults_content(self, creds: dict[str, str]) -> str:
-        return mysql_defaults_content(creds)
 
     def _target_sql_root(self) -> dict[str, str]:
         if self._target_sql_root_credentials is not None:
@@ -300,19 +278,13 @@ class Migrator:
             return self._target_sql_root_credentials
         raise MigrationError("Could not parse target sql_root credentials from froxlor userdata files")
 
-    def _source_mysql_connect_kwargs(self) -> dict[str, Any]:
-        return connect_kwargs_from_credentials(self._source_sql_root())
-
-    def _source_panel_connect_kwargs(self) -> dict[str, Any]:
-        return connect_kwargs_from_credentials(self._source_sql())
-
     @contextmanager
     def _target_mysql_connect_kwargs(self) -> Iterator[dict[str, Any]]:
         creds = self._target_sql_root()
         kwargs = connect_kwargs_from_credentials(creds)
         remote_host = str(kwargs.get("host", "localhost"))
         remote_port = int(kwargs.get("port", 3306))
-        transport = self.runner.ssh.transport()
+        transport = self.runner.ssh_transport()
         with open_ssh_tunnel(transport, remote_host, remote_port) as (_, local_port):
             tunneled = dict(kwargs)
             tunneled.pop("unix_socket", None)
@@ -333,7 +305,7 @@ class Migrator:
         if self.runner.dry_run:
             return []
         try:
-            return mysql_query(self._source_mysql_connect_kwargs(), database, sql)
+            return mysql_query(connect_kwargs_from_credentials(self._source_sql_root()), database, sql)
         except Exception as exc:
             raise MigrationError(f"Source SQL query failed: {str(exc)[:400]}") from exc
 
@@ -341,7 +313,7 @@ class Migrator:
         if self.runner.dry_run:
             return []
         try:
-            return mysql_query(self._source_panel_connect_kwargs(), self.config.mysql.source_panel_database, sql)
+            return mysql_query(connect_kwargs_from_credentials(self._source_sql()), self.config.mysql.source_panel_database, sql)
         except Exception as exc:
             raise MigrationError(f"Source panel SQL query failed: {str(exc)[:400]}") from exc
 
@@ -423,7 +395,13 @@ class Migrator:
         self._exec_target_panel_sql(sql)
 
     def _load_source_domain_redirects(self, domains: list[dict[str, Any]]) -> list[tuple[str, str, int]]:
-        domain_names = sorted({self._domain_name(row).lower() for row in domains if self._domain_name(row)})
+        domain_names = sorted(
+            {
+                str(pick(row, "domain", "domainname", default="")).lower()
+                for row in domains
+                if str(pick(row, "domain", "domainname", default=""))
+            }
+        )
         if not domain_names:
             return []
         domain_sql = ", ".join(self._sql_utf8_literal(name) for name in domain_names)
@@ -466,12 +444,6 @@ class Migrator:
             )
         self._exec_target_panel_sql(" ".join(statements))
 
-    def _target_database_set(self) -> set[str]:
-        return {self._database_name(item) for item in self.target.list_mysqls() if self._database_name(item)}
-
-    def _target_mail_set(self) -> set[str]:
-        return {self._email_name(item) for item in self.target.list_emails() if self._email_name(item)}
-
     def _migrate_domain_certificates(self, domains: list[dict[str, Any]]) -> None:
         source_certs = self.source.listing("Certificates.listing")
         target_certs = self.target.listing("Certificates.listing")
@@ -479,7 +451,7 @@ class Migrator:
         target_by_domain = {str(pick(cert, "domainname", "domain", default="")).lower(): cert for cert in target_certs}
 
         for domain in domains:
-            domain_name = self._domain_name(domain).lower()
+            domain_name = str(pick(domain, "domain", "domainname", default="")).lower()
             if not domain_name:
                 continue
             # LE-managed domains should not be validated against static certificate blobs.
@@ -581,9 +553,13 @@ class Migrator:
         ip_value_mapping: dict[str, str],
         customer_login: str,
     ) -> None:
-        existing_domains = self._target_domain_set()
+        existing_domains = {
+            str(pick(item, "domain", "domainname", default=""))
+            for item in self.target.list_domains()
+            if str(pick(item, "domain", "domainname", default=""))
+        }
         for domain in domains:
-            domain_name = self._domain_name(domain)
+            domain_name = str(pick(domain, "domain", "domainname", default=""))
             if not domain_name:
                 continue
 
@@ -889,7 +865,7 @@ class Migrator:
         for domain in domains:
             if not bool(as_int(pick(domain, "letsencrypt", default=0))):
                 continue
-            domain_name = self._domain_name(domain)
+            domain_name = str(pick(domain, "domain", "domainname", default=""))
             if not domain_name:
                 continue
             target_domain = self._get_target_domain(domain_name)
@@ -912,7 +888,7 @@ class Migrator:
         known_before: set[str],
         customer_login: str,
     ) -> str:
-        src_name = self._database_name(source_db)
+        src_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
         if not src_name:
             raise MigrationError("Source database has no name")
         if src_name in known_before:
@@ -932,7 +908,11 @@ class Migrator:
         except FroxlorApiError as exc:
             # Froxlor may return non-JSON SQL errors after creating the DB (or when it
             # already exists). Reconcile state before failing hard.
-            after_error = self._target_database_set()
+            after_error = {
+                str(pick(item, "databasename", "dbname", "database", default=""))
+                for item in self.target.list_mysqls()
+                if str(pick(item, "databasename", "dbname", "database", default=""))
+            }
             if src_name in after_error:
                 return src_name
             if self._target_database_exists_physical(src_name):
@@ -942,7 +922,11 @@ class Migrator:
                 return new_entries_after_error[0]
             raise MigrationError(f"Failed to create target database {src_name!r}: {exc}") from exc
 
-        after = self._target_database_set()
+        after = {
+            str(pick(item, "databasename", "dbname", "database", default=""))
+            for item in self.target.list_mysqls()
+            if str(pick(item, "databasename", "dbname", "database", default=""))
+        }
         new_entries = sorted(after - known_before)
         if src_name in after:
             return src_name
@@ -1572,7 +1556,11 @@ class Migrator:
                 existing.add(key)
 
     def _ensure_mailboxes(self, target_customer_id: int, mailboxes: list[dict[str, Any]]) -> list[str]:
-        existing = self._target_mail_set()
+        existing = {
+            str(pick(item, "email_full", "email", "emailaddr", default=""))
+            for item in self.target.list_emails()
+            if str(pick(item, "email_full", "email", "emailaddr", default=""))
+        }
         transferable: list[str] = []
 
         for mailbox_row in mailboxes:
@@ -1747,9 +1735,13 @@ class Migrator:
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:
             self._sync_target_mysql_prefix_setting()
-            known_before = self._target_database_set()
+            known_before = {
+                str(pick(item, "databasename", "dbname", "database", default=""))
+                for item in self.target.list_mysqls()
+                if str(pick(item, "databasename", "dbname", "database", default=""))
+            }
             for source_db in selection.databases:
-                source_name = self._database_name(source_db)
+                source_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
                 target_name = self._create_database_on_target(target_customer_id, source_db, known_before, customer_login)
                 if selection.validate_database_names and source_name != target_name:
                     raise MigrationError(

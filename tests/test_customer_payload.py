@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+from froxlor_migrator.froxlor_mysql import extract_sql_root_credentials, mysql_defaults_content
 from froxlor_migrator.migrate import Migrator
 
 
@@ -25,7 +26,6 @@ class CustomerPayloadTests(unittest.TestCase):
         self.assertEqual([0], payload["allowed_mysqlserver"])
 
     def test_extract_sql_root_credentials_from_userdata(self) -> None:
-        migrator = object.__new__(Migrator)
         content = """
 <?php
 // Managed by Ansible - froxlor role
@@ -40,7 +40,7 @@ $sql_root[0]['password'] = '222222222';
 // enable debugging to browser in case of SQL errors
 $sql['debug'] = false;
 """
-        creds = migrator._extract_sql_root_credentials(content)
+        creds = extract_sql_root_credentials(content)
         self.assertEqual(
             {
                 "host": "localhost",
@@ -51,8 +51,7 @@ $sql['debug'] = false;
         )
 
     def test_build_mysql_defaults_content(self) -> None:
-        migrator = object.__new__(Migrator)
-        content = migrator._build_mysql_defaults_content({
+        content = mysql_defaults_content({
             "user": "root",
             "password": "pw",
             "host": "localhost",

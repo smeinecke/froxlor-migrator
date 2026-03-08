@@ -103,9 +103,11 @@ class TransferRunner:
         options.extend([f"-p {self.config.ssh.port}"])
         return f"{ssh} {' '.join(options)} -l {shlex.quote(self.config.ssh.user)} {shlex.quote(self.config.ssh.host)}"
 
-    @property
-    def ssh(self) -> SshDriver:
-        return self._ssh
+    def ssh_transport(self):
+        transport = self._ssh.transport()
+        if transport is None:
+            raise TransferError("SSH transport is not available")
+        return transport
 
     @staticmethod
     def _command_available(command: str) -> bool:
