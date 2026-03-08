@@ -92,6 +92,8 @@ services:
     volumes:
       - ${TESTING_BIND_ROOT:-.}/data/target/customers:/data/customers
       - ${TESTING_BIND_ROOT:-.}/ssh:/tmp/bootstrap-ssh:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - target-net
 

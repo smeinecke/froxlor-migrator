@@ -69,6 +69,10 @@ jobs:
           docker compose --profile bootstrap run --rm bootstrap
         working-directory: testing
 
+      - name: Relax test data permissions for artifact upload
+        if: failure()
+        run: sudo chmod -R a+rX testing/data || true
+
       - name: Upload test logs
         if: failure()
         uses: actions/upload-artifact@v4
