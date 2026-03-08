@@ -147,10 +147,10 @@ class TransferRunner:
             if include_database_tools:
                 commands.append(f"{ssh_prefix} command -v {shlex.quote(self.config.commands.mysql)}")
         if include_mail_tools:
-            commands.append(f"{sudo} {doveadm} doveadm process status >/dev/null 2>&1")
+            commands.append(f"{sudo} {doveadm} process status >/dev/null 2>&1")
             if include_ssh:
                 ssh_prefix = self._ssh_prefix()
-                commands.append(f"{ssh_prefix} {sudo} {doveadm} doveadm process status >/dev/null 2>&1")
+                commands.append(f"{ssh_prefix} {sudo} {doveadm} process status >/dev/null 2>&1")
         return commands
 
     def _get_compression_command(self) -> tuple[str, str]:
