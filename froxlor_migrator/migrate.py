@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import subprocess
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .api import FroxlorApiError, FroxlorClient
@@ -58,6 +61,8 @@ class Migrator:
         self.source = source
         self.target = target
         self.runner = runner
+        self._source_mysql_defaults_file: str | None = None
+        self._target_mysql_defaults_file: str | None = None
 
     def preflight(self, selection: Selection) -> None:
         self.source.test_connection()
@@ -246,6 +251,107 @@ class Migrator:
         options.append(f"-p {self.config.ssh.port}")
         return f"{ssh} {' '.join(options)} -l {shlex.quote(self.config.ssh.user)} {shlex.quote(self.config.ssh.host)}"
 
+    def _froxlor_userdata_paths(self) -> list[str]:
+        return [
+            "/var/www/froxlor/lib/userdata.inc.php",
+            "/var/www/html/froxlor/lib/userdata.inc.php",
+        ]
+
+    def _extract_sql_root_credentials(self, content: str) -> dict[str, str] | None:
+        pairs: dict[str, str] = {}
+
+        # Froxlor classic format:
+        # $sql_root[0]['host']='localhost';
+        # $sql_root[0]['user']='root';
+        for key, raw_value in re.findall(r"\$sql_root\s*\[\s*0\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
+            pairs[key] = raw_value
+
+        # Alternative array format:
+        # 'sql_root' => ['host' => '...', 'user' => '...']
+        if not pairs:
+            sql_root_match = re.search(r"['\"]sql_root['\"]\s*=>\s*\[(.*?)\]\s*,", content, flags=re.DOTALL)
+            body = sql_root_match.group(1) if sql_root_match else content
+            pairs = dict(re.findall(r"['\"]([A-Za-z0-9_]+)['\"]\s*=>\s*['\"]((?:\\.|[^'\"])*)['\"]", body))
+
+        user = pairs.get("user", "").encode("utf-8").decode("unicode_escape").strip()
+        password = pairs.get("password", "").encode("utf-8").decode("unicode_escape")
+        host = pairs.get("host", "").encode("utf-8").decode("unicode_escape").strip() or "localhost"
+        if not user:
+            return None
+        result = {"user": user, "password": password, "host": host}
+        if "port" in pairs and pairs["port"].strip():
+            result["port"] = pairs["port"].strip()
+        if "socket" in pairs and pairs["socket"].strip():
+            result["socket"] = pairs["socket"].strip()
+        return result
+
+    def _build_mysql_defaults_content(self, creds: dict[str, str]) -> str:
+        lines = ["[client]"]
+        for key in ("user", "password", "host", "port", "socket"):
+            value = creds.get(key, "")
+            if value:
+                lines.append(f"{key}={value}")
+        return "\n".join(lines) + "\n"
+
+    def _ensure_source_mysql_defaults_file(self) -> str | None:
+        if self._source_mysql_defaults_file:
+            return self._source_mysql_defaults_file
+        for path in self._froxlor_userdata_paths():
+            candidate = Path(path)
+            if not candidate.exists():
+                continue
+            try:
+                creds = self._extract_sql_root_credentials(candidate.read_text(encoding="utf-8", errors="ignore"))
+            except Exception:
+                continue
+            if not creds:
+                continue
+            fd, temp_path = tempfile.mkstemp(prefix="froxlor-migrator-source-mysql-", suffix=".cnf")
+            os.close(fd)
+            Path(temp_path).write_text(self._build_mysql_defaults_content(creds), encoding="utf-8")
+            os.chmod(temp_path, 0o600)
+            self._source_mysql_defaults_file = temp_path
+            return temp_path
+        return None
+
+    def _ensure_target_mysql_defaults_file(self) -> str | None:
+        if self._target_mysql_defaults_file:
+            return self._target_mysql_defaults_file
+        ssh_prefix = self._ssh_prefix()
+        creds: dict[str, str] | None = None
+        for path in self._froxlor_userdata_paths():
+            remote_cmd = f"cat {shlex.quote(path)}"
+            completed = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", f"{ssh_prefix} {shlex.quote(remote_cmd)}"],
+                capture_output=True,
+                text=True,
+            )
+            if completed.returncode != 0 or not completed.stdout.strip():
+                continue
+            creds = self._extract_sql_root_credentials(completed.stdout)
+            if creds:
+                break
+        if not creds:
+            return None
+        remote_path = f"/tmp/froxlor-migrator-target-mysql-{random_password(12)}.cnf"
+        content = self._build_mysql_defaults_content(creds)
+        heredoc = "MYSQLLOGINEOF"
+        remote_write_cmd = (
+            f"umask 077; cat > {shlex.quote(remote_path)} <<'{heredoc}'\n"
+            f"{content}"
+            f"{heredoc}\n"
+            f"chmod 600 {shlex.quote(remote_path)}"
+        )
+        write_completed = subprocess.run(
+            ["bash", "-o", "pipefail", "-c", f"{ssh_prefix} {shlex.quote(remote_write_cmd)}"],
+            capture_output=True,
+            text=True,
+        )
+        if write_completed.returncode != 0:
+            return None
+        self._target_mysql_defaults_file = remote_path
+        return remote_path
+
     def _sql_utf8_literal(self, value: str) -> str:
         if value == "":
             return "''"
@@ -258,8 +364,10 @@ class Migrator:
     def _run_source_mysql_query(self, sql: str, database: str) -> list[list[str]]:
         if self.runner.dry_run:
             return []
+        defaults_file = self._ensure_source_mysql_defaults_file()
         command = [
             *shlex.split(self.config.commands.mysql),
+            *( [f"--defaults-file={defaults_file}"] if defaults_file else [] ),
             *self.config.mysql.source_dump_args,
             database,
             "-N",
@@ -280,9 +388,11 @@ class Migrator:
 
     def _exec_target_mysql_sql(self, sql: str, database: str) -> None:
         mysql = shlex.quote(self.config.commands.mysql)
+        defaults_file = self._ensure_target_mysql_defaults_file()
+        defaults_arg = f" --defaults-file={shlex.quote(defaults_file)}" if defaults_file else ""
         target_args = " ".join(shlex.quote(arg) for arg in self.config.mysql.target_import_args)
         db_name = shlex.quote(database)
-        remote_cmd = f"{mysql} {target_args} {db_name} -e {shlex.quote(sql)}"
+        remote_cmd = f"{mysql}{defaults_arg} {target_args} {db_name} -e {shlex.quote(sql)}"
         self.runner.run(f"{self._ssh_prefix()} {shlex.quote(remote_cmd)}")
 
     def _exec_target_panel_sql(self, sql: str) -> None:
