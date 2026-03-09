@@ -47,6 +47,23 @@ class MigratorCore:
         panel_db = self.config.mysql.target_panel_database.strip().lower()
         return database.strip().lower() != panel_db
 
+    @staticmethod
+    def _mysql_socket_candidates() -> list[str]:
+        return [
+            "/run/mysqld/mysqld.sock",
+            "/var/run/mysqld/mysqld.sock",
+            "/tmp/mysql.sock",
+            "/run/mysql/mysql.sock",
+            "/var/lib/mysql/mysql.sock",
+        ]
+
+    def _discover_remote_mysql_socket(self) -> str:
+        for candidate in self._mysql_socket_candidates():
+            result = self.runner.run_remote(f"test -S {shlex.quote(candidate)}", check=False)
+            if result.returncode == 0:
+                return candidate
+        return ""
+
     def _relative_customer_path(self, path: str, customer_login: str) -> str:
         cleaned = path.strip().strip("/")
         if not cleaned:
@@ -299,6 +316,18 @@ class MigratorCore:
         creds = self._target_sql_root()
         kwargs = connect_kwargs_from_credentials(creds)
         socket_path = str(kwargs.get("unix_socket", "")).strip()
+        if not socket_path:
+            discovered = self._discover_remote_mysql_socket()
+            if discovered:
+                socket_path = discovered
+                kwargs["unix_socket"] = discovered
+                kwargs.pop("host", None)
+                kwargs.pop("port", None)
+                self._debug(
+                    "discovered_target_mysql_socket",
+                    remote_socket=discovered,
+                    user=str(kwargs.get("user", "")),
+                )
         if socket_path:
             self._debug(
                 "opening_target_mysql_socket_tunnel",

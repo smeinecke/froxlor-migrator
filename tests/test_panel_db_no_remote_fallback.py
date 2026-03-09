@@ -37,6 +37,28 @@ class _RunnerStub:
 
 
 class PanelDbFallbackTests(unittest.TestCase):
+    def test_target_mysql_connect_kwargs_discovers_socket_when_missing_in_creds(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = _config()  # type: ignore[assignment]
+        migrator.runner = _RunnerStub()  # type: ignore[assignment]
+        migrator._target_sql_root = lambda: {  # type: ignore[method-assign]
+            "user": "root",
+            "password": "secret",
+            "host": "localhost",
+        }
+        migrator._discover_remote_mysql_socket = lambda: "/var/run/mysqld/mysqld.sock"  # type: ignore[method-assign]
+
+        @contextmanager
+        def _fake_socket_tunnel(remote_socket: str):  # noqa: ARG001
+            yield "/tmp/local-mysql.sock"
+
+        migrator._open_ssh_unix_socket_tunnel = _fake_socket_tunnel  # type: ignore[method-assign]
+
+        with migrator._target_mysql_connect_kwargs() as kwargs:
+            self.assertEqual("/tmp/local-mysql.sock", kwargs.get("unix_socket"))
+            self.assertNotIn("host", kwargs)
+            self.assertNotIn("port", kwargs)
+
     def test_target_mysql_connect_kwargs_prefers_socket_tunnel(self) -> None:
         migrator = object.__new__(Migrator)
         migrator.config = _config()  # type: ignore[assignment]
