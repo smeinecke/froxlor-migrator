@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import shlex
 from collections.abc import Callable
 from datetime import datetime
@@ -609,6 +610,12 @@ def run_app() -> None:
         help="Allow source/target database names to differ after Mysqls.add",
     )
     args = parser.parse_args()
+
+    if args.debug:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+        )
 
     try:
         config = load_config(args.config)

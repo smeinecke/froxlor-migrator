@@ -96,6 +96,36 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertEqual("Step one", progress_events[0]["status"])
             self.assertEqual("Step two", progress_events[1]["status"])
 
+    def test_transfer_mailbox_fails_when_ssh_target_is_local(self) -> None:
+        class GuardedRunner(TransferRunner):
+            def _ssh_target_is_local(self) -> bool:
+                return True
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = GuardedRunner(config=_config(tmpdir), dry_run=False, manifest_name="mailbox")
+            with self.assertRaises(TransferError):
+                runner.transfer_mailbox("info@example.test")
+
+    def test_transfer_mailbox_uses_doveadm_backup_command(self) -> None:
+        class CaptureRunner(TransferRunner):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.commands: list[str] = []
+
+            def _ssh_target_is_local(self) -> bool:
+                return False
+
+            def run(self, command: str, check: bool = True):  # noqa: ARG002
+                self.commands.append(command)
+                return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = CaptureRunner(config=_config(tmpdir), dry_run=False, manifest_name="mailbox")
+            runner.transfer_mailbox("info@example.test")
+            self.assertEqual(1, len(runner.commands))
+            self.assertIn("doveadm backup -u info@example.test", runner.commands[0])
+            self.assertIn("dsync-server -u info@example.test", runner.commands[0])
+
 
 if __name__ == "__main__":
     unittest.main()

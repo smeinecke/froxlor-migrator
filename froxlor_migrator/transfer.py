@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import shlex
+import socket
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -15,6 +17,9 @@ from .util import ensure_dir
 
 class TransferError(RuntimeError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,6 +80,7 @@ class TransferRunner:
     def run(self, command: str, check: bool = True) -> CommandResult:
         started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run})
+        logger.debug("Local command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
         if self.dry_run:
             finished = datetime.now(timezone.utc).isoformat()
             return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
@@ -106,6 +112,11 @@ class TransferRunner:
                 "stderr": self._truncate_output(completed.stderr or ""),
             },
         )
+        logger.debug(
+            "Local command result: returncode=%s command=%s",
+            completed.returncode,
+            command,
+        )
         if check and completed.returncode != 0:
             self._log_event(
                 "error",
@@ -128,6 +139,31 @@ class TransferRunner:
         options.extend([f"-p {self.config.ssh.port}"])
         return f"{ssh} {' '.join(options)} -l {shlex.quote(self.config.ssh.user)} {shlex.quote(self.config.ssh.host)}"
 
+    def _ssh_target_is_local(self) -> bool:
+        host = self.config.ssh.host.strip().lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return True
+
+        local_names = {
+            socket.gethostname().lower(),
+            socket.getfqdn().lower(),
+        }
+        if host in local_names:
+            return True
+
+        try:
+            target_ip = socket.gethostbyname(host)
+        except Exception:
+            return False
+
+        local_ips: set[str] = set()
+        for name in local_names:
+            try:
+                local_ips.update(socket.gethostbyname_ex(name)[2])
+            except Exception:
+                continue
+        return target_ip in local_ips
+
     def ssh_transport(self):
         transport = self._ssh.transport()
         if transport is None:
@@ -144,6 +180,7 @@ class TransferRunner:
 
     def _remote_command_available(self, command: str) -> bool:
         try:
+            logger.debug("Checking remote command availability: command=%s", command)
             result = self._ssh.run(f"command -v {shlex.quote(command)}")
             return result.returncode == 0
         except Exception:
@@ -169,6 +206,7 @@ class TransferRunner:
         if include_database_tools:
             commands.append(f"command -v {shlex.quote(self.config.commands.mysqldump)}")
         if include_ssh and not self.dry_run:
+            logger.debug("Running remote command preflight checks")
             if not self._remote_command_available(self.config.commands.sudo):
                 raise TransferError(f"Remote command not found: {self.config.commands.sudo}")
             if include_database_tools and not self._remote_command_available(self.config.commands.mysql):
@@ -230,11 +268,17 @@ class TransferRunner:
             sftp.close()
 
     def transfer_mailbox(self, mailbox: str) -> None:
+        if self._ssh_target_is_local():
+            raise TransferError(
+                "Mailbox transfer requires running on the source mail host; "
+                "configured SSH target resolves to this local machine."
+            )
         sudo = shlex.quote(self.config.commands.sudo)
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_prefix = self._ssh_prefix()
         remote = f"{ssh_prefix} {shlex.quote(self.config.commands.sudo + ' ' + self.config.commands.doveadm + ' dsync-server -u ' + mailbox)}"
         command = f"{sudo} {doveadm} backup -u {shlex.quote(mailbox)} {remote}"
+        logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
         self.run(command)
 
     def read_remote_file(self, path: str) -> str:
@@ -245,6 +289,7 @@ class TransferRunner:
     def run_remote(self, command: str, check: bool = True) -> CommandResult:
         started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run, "remote": True})
+        logger.debug("Remote command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
         if self.dry_run:
             finished = datetime.now(timezone.utc).isoformat()
             return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
@@ -263,6 +308,11 @@ class TransferRunner:
                 "stderr": self._truncate_output(completed.stderr or ""),
                 "remote": True,
             },
+        )
+        logger.debug(
+            "Remote command result: returncode=%s command=%s",
+            completed.returncode,
+            command,
         )
         if check and completed.returncode != 0:
             raise TransferError(f"Remote command failed ({completed.returncode}): {command}")

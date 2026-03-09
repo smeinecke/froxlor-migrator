@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -13,6 +14,9 @@ from requests.exceptions import RequestException
 
 class FroxlorApiError(RuntimeError):
     pass
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -31,6 +35,13 @@ class FroxlorClient:
         if params:
             body["params"] = params
 
+        logger.debug(
+            "Froxlor API call: command=%s url=%s params=%s",
+            command,
+            self.api_url,
+            params or {},
+        )
+
         try:
             response = requests.post(
                 self.api_url,
@@ -41,7 +52,8 @@ class FroxlorClient:
                 data=json.dumps(body),
                 timeout=self.timeout_seconds,
             )
-        except RequestException:
+        except RequestException as exc:
+            logger.debug("Froxlor API request failed, retrying once: command=%s error=%s", command, exc)
             # Network-level failures can be transient; retry once.
             time.sleep(0.5)
             try:
@@ -55,19 +67,36 @@ class FroxlorClient:
                     timeout=self.timeout_seconds,
                 )
             except RequestException as exc2:
+                logger.debug("Froxlor API retry failed: command=%s error=%s", command, exc2)
                 raise FroxlorApiError(f"API {command} request failed: {exc2}") from exc2
 
+        logger.debug("Froxlor API response: command=%s http_status=%s", command, response.status_code)
+
         if response.status_code >= 400:
+            logger.debug(
+                "Froxlor API HTTP error: command=%s status=%s body=%s",
+                command,
+                response.status_code,
+                response.text[:400],
+            )
             raise FroxlorApiError(f"API {command} failed with HTTP {response.status_code}: {response.text[:400]}")
 
         try:
             data = response.json()
         except RequestsJSONDecodeError as exc:
             snippet = response.text[:400]
+            logger.debug("Froxlor API non-JSON response: command=%s body=%s", command, snippet)
             raise FroxlorApiError(f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}") from exc
 
         if data.get("status") and int(data.get("status", 200)) >= 400:
+            logger.debug(
+                "Froxlor API semantic error: command=%s status=%s message=%s",
+                command,
+                data.get("status"),
+                data.get("status_message", "unknown error"),
+            )
             raise FroxlorApiError(f"API {command} failed: {data.get('status_message', 'unknown error')}")
+        logger.debug("Froxlor API call succeeded: command=%s", command)
         return data.get("data")
 
     def test_connection(self) -> None:
@@ -157,18 +186,18 @@ class FroxlorClient:
             except FroxlorApiError:
                 return []
             mailbox_email = (emailaddr or "").strip().lower()
-            rows: list[dict[str, Any]] = []
+            filtered_rows: list[dict[str, Any]] = []
             for item in raw_rows:
                 destination = str(item.get("destination") or item.get("address") or "").strip().lower()
                 if not destination or (mailbox_email and destination == mailbox_email):
                     continue
-                rows.append({
+                filtered_rows.append({
                     **item,
                     "emailaddr": mailbox_email or str(item.get("email") or item.get("emailaddr") or "").strip().lower(),
                     "email": mailbox_email or str(item.get("email") or item.get("emailaddr") or "").strip().lower(),
                     "destination": destination,
                 })
-            return rows
+            return filtered_rows
 
         rows: list[dict[str, Any]] = []
         for mailbox in self.list_emails(customerid=customerid, loginname=loginname):
