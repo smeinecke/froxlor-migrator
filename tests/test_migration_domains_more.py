@@ -4,7 +4,6 @@ import unittest
 from types import SimpleNamespace
 
 from froxlor_migrator.migration.domains import MigratorDomainOps
-from froxlor_migrator.migration.types import MigrationError
 
 
 class DummyDomainOps(MigratorDomainOps):
@@ -319,17 +318,20 @@ if __name__ == "__main__":
             call=lambda method, payload: calls.append((method, payload)),
         )
 
-        op._ensure_domain_zones([
-            {
-                "domainname": "example.com",
-                "record": "www",
-                "type": "A",
-                "prio": 0,
-                "content": "1.1.1.1",
-                "ttl": 300,
-                "is_default": 0,
-            }
-        ], {"1.1.1.1": "2.2.2.2"})
+        op._ensure_domain_zones(
+            [
+                {
+                    "domainname": "example.com",
+                    "record": "www",
+                    "type": "A",
+                    "prio": 0,
+                    "content": "1.1.1.1",
+                    "ttl": 300,
+                    "is_default": 0,
+                }
+            ],
+            {"1.1.1.1": "2.2.2.2"},
+        )
 
         self.assertTrue(any(m == "DomainZones.add" for m, _ in calls))
 

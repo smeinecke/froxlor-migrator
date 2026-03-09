@@ -53,8 +53,48 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         self.assertEqual({10: "y"}, result)
 
     def test_compare_domain_returns_errors_for_mismatches(self) -> None:
-        source = {"documentroot": "/src", "phpenabled": 1, "ssl_enabled": 0, "letsencrypt": 0, "isemaildomain": 0, "email_only": 0, "specialsettings": "A", "ssl_specialsettings": "B", "openbasedir": 1, "openbasedir_path": "/", "writeaccesslog": 1, "writeerrorlog": 1, "dkim": 0, "alias": 0, "specialsettingsforsubdomains": 0, "phpsettingsforsubdomains": 0, "mod_fcgid_starter": -1, "mod_fcgid_maxrequests": -1, "deactivated": 0}
-        target = {"documentroot": "/different", "phpenabled": 0, "ssl_enabled": 1, "letsencrypt": 1, "isemaildomain": 1, "email_only": 1, "specialsettings": "C", "ssl_specialsettings": "D", "openbasedir": 0, "openbasedir_path": "/x", "writeaccesslog": 0, "writeerrorlog": 0, "dkim": 1, "alias": 1, "specialsettingsforsubdomains": 1, "phpsettingsforsubdomains": 1, "mod_fcgid_starter": 0, "mod_fcgid_maxrequests": 0, "deactivated": 1}
+        source = {
+            "documentroot": "/src",
+            "phpenabled": 1,
+            "ssl_enabled": 0,
+            "letsencrypt": 0,
+            "isemaildomain": 0,
+            "email_only": 0,
+            "specialsettings": "A",
+            "ssl_specialsettings": "B",
+            "openbasedir": 1,
+            "openbasedir_path": "/",
+            "writeaccesslog": 1,
+            "writeerrorlog": 1,
+            "dkim": 0,
+            "alias": 0,
+            "specialsettingsforsubdomains": 0,
+            "phpsettingsforsubdomains": 0,
+            "mod_fcgid_starter": -1,
+            "mod_fcgid_maxrequests": -1,
+            "deactivated": 0,
+        }
+        target = {
+            "documentroot": "/different",
+            "phpenabled": 0,
+            "ssl_enabled": 1,
+            "letsencrypt": 1,
+            "isemaildomain": 1,
+            "email_only": 1,
+            "specialsettings": "C",
+            "ssl_specialsettings": "D",
+            "openbasedir": 0,
+            "openbasedir_path": "/x",
+            "writeaccesslog": 0,
+            "writeerrorlog": 0,
+            "dkim": 1,
+            "alias": 1,
+            "specialsettingsforsubdomains": 1,
+            "phpsettingsforsubdomains": 1,
+            "mod_fcgid_starter": 0,
+            "mod_fcgid_maxrequests": 0,
+            "deactivated": 1,
+        }
         errors = _compare_domain(source, target, {}, {}, ["/src"], "/tgt")
         self.assertTrue(any("documentroot" in e for e in errors))
         self.assertTrue(any("phpenabled" in e for e in errors))

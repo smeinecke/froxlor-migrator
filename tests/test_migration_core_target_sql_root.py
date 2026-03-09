@@ -4,7 +4,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from froxlor_migrator.migration.core import MigratorCore, MigrationError
+from froxlor_migrator.migration.core import MigrationError, MigratorCore
 
 
 class DummyRunner:

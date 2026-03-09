@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +14,7 @@ class StubRunner:
 
     def run_remote(self, command: str, check: bool = True):
         self.remote_calls.append(command)
+
         # mimic a successful remote check for known socket
         class Result:
             returncode = 0

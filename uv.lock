@@ -88,6 +88,15 @@ wheels = [
 ]
 
 [[package]]
+name = "cachetools"
+version = "7.0.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/af/dd/57fe3fdb6e65b25a5987fd2cdc7e22db0aef508b91634d2e57d22928d41b/cachetools-7.0.5.tar.gz", hash = "sha256:0cd042c24377200c1dcd225f8b7b12b0ca53cc2c961b43757e774ebe190fd990", size = 37367 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/06/f3/39cf3367b8107baa44f861dc802cbf16263c945b62d8265d36034fc07bea/cachetools-7.0.5-py3-none-any.whl", hash = "sha256:46bc8ebefbe485407621d0a4264b23c080cedd913921bad7ac3ed2f26c183114", size = 13918 },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.2.25"
 source = { registry = "https://pypi.org/simple" }
@@ -471,6 +480,7 @@ name = "froxlor-migrator"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
+    { name = "cachetools" },
     { name = "paramiko" },
     { name = "pymysql" },
     { name = "requests" },
@@ -491,6 +501,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cachetools", specifier = ">=7.0.5" },
     { name = "paramiko", specifier = ">=3.5.0" },
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "requests", specifier = ">=2.32.0" },

@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from cachetools import LRUCache, cached
+
 
 def froxlor_userdata_paths() -> list[str]:
     return [
@@ -125,6 +127,14 @@ def _extract_php_array_value(body: str, key: str) -> str | None:
     return None
 
 
+_read_file_cache = LRUCache(maxsize=32)
+
+
+@cached(_read_file_cache)
+def _read_userdata_file(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8", errors="ignore")
+
+
 def _load_local_credentials(
     paths: list[str] | None,
     extractor,
@@ -137,7 +147,8 @@ def _load_local_credentials(
         path = Path(raw_path)
         if not path.exists() or not path.is_file():
             continue
-        creds = extractor(path.read_text(encoding="utf-8", errors="ignore"))
+        content = _read_userdata_file(str(path))
+        creds = extractor(content)
         if creds:
             found.append(creds)
     if found:

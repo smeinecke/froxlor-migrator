@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import tempfile
 from unittest.mock import MagicMock, patch
 
 from froxlor_migrator import mysql_driver

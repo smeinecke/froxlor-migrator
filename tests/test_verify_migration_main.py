@@ -47,8 +47,10 @@ class StubClient:
 
     def list_email_senders(self, **kwargs):
         return []
+
     def list_domain_zones(self, **kwargs):
         return []
+
     def listing(self, command: str):
         return []
 
@@ -72,6 +74,7 @@ class VerifyMigrationMainTests(unittest.TestCase):
                 target_web_root = "/var/www"
 
             paths = Paths()
+
             class Mysql:
                 target_panel_database = "froxlor"
 

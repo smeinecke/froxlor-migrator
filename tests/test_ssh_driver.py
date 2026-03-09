@@ -5,8 +5,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import paramiko
-
 from froxlor_migrator.config import load_config
 from froxlor_migrator.ssh_driver import SshDriver, _identity_file_from_ssh_command
 

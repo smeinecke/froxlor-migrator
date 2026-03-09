@@ -1,17 +1,13 @@
 from __future__ import annotations
 
 import contextlib
-import json
 import os
-import subprocess
-import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from froxlor_migrator.api import FroxlorApiError
-from froxlor_migrator.migration.core import MigratorCore
-from froxlor_migrator.migration.core import MigrationError
+from froxlor_migrator.migration.core import MigrationError, MigratorCore
 
 
 class DummyRunner:
@@ -25,6 +21,7 @@ class DummyRunner:
 
     def run_remote(self, command: str, check: bool = True):
         self._run_remote_calls.append(command)
+
         class Result:
             returncode = 0
             stdout = ""
@@ -173,7 +170,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
     def test_sync_ftp_password_hashes_errors_and_builds_sql(self) -> None:
         self.core._exec_target_panel_sql = lambda sql: setattr(self, "executed_sql", sql)
-        with self.assertRaises(Exception):
+        with self.assertRaises(MigrationError):
             self.core._sync_ftp_password_hashes(1, [{"username": "u", "password": ""}])
 
         self.core._sync_ftp_password_hashes(2, [{"username": "u", "password": "hash"}])
@@ -183,10 +180,10 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.core._run_source_panel_query = lambda sql: [["u@example.com", "", ""]]
         self.core._exec_target_panel_sql = lambda sql: setattr(self, "executed_mail_sql", sql)
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(MigrationError):
             self.core._sync_mail_password_hashes(1, [{"email": "u2@example.com"}])
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(MigrationError):
             self.core._sync_mail_password_hashes(1, [{"email": "u@example.com"}])
 
         self.core._run_source_panel_query = lambda sql: [["u@example.com", "p", "e"]]
@@ -208,7 +205,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
         # Unsupported plugin should raise
         self.core._run_source_mysql_query = lambda sql, db: [["user", "bad-plugin", "hash"]]
-        with self.assertRaises(Exception):
+        with self.assertRaises(MigrationError):
             self.core._sync_database_login_hashes({"user": "user"})
 
     def test_sync_dir_protection_password_hashes_generates_update_sql(self) -> None:
@@ -367,7 +364,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
     def test_load_source_mail_password_hashes_parses_rows(self) -> None:
         self.core._run_source_panel_query = lambda sql: [["a@example.com", "h1", "e1"], ["b@example.com", "h2", "e2"]]
-        out = self.core._load_source_mail_password_hashes([{"email": "a@example.com"}, {"email":"b@example.com"}])
+        out = self.core._load_source_mail_password_hashes([{"email": "a@example.com"}, {"email": "b@example.com"}])
         self.assertEqual({"a@example.com": ("h1", "e1"), "b@example.com": ("h2", "e2")}, out)
 
     def test_load_source_database_user_hashes_parses_rows(self) -> None:
@@ -423,7 +420,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         called: list[str] = []
         self.source.test_connection = lambda: called.append("src")
         self.target.test_connection = lambda: called.append("tgt")
-        self.runner.preflight_commands = lambda **kwargs: [f"cmd_{kwargs}" ]
+        self.runner.preflight_commands = lambda **kwargs: [f"cmd_{kwargs}"]
         self.runner.run = lambda cmd: called.append(cmd)
 
         from froxlor_migrator.migration.types import Selection
@@ -477,7 +474,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
             @property
             def stderr(self):
-                return open(os.devnull, "r")
+                return open(os.devnull)
 
         def fake_popen(cmd, stdout, stderr, text):
             return DummyProcess()

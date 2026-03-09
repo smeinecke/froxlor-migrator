@@ -108,11 +108,13 @@ class RunAppTests(unittest.TestCase):
 
             commands = Commands()
 
-        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch.object(
-            tui_module, "FroxlorClient", DummyClient
-        ), patch.object(tui_module, "TransferRunner", DummyRunner), patch.object(
-            tui_module, "Migrator", DummyMigrator
-        ), patch.object(tui_module, "Selection", lambda **kwargs: SimpleNamespace(**kwargs)):
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "FroxlorClient", DummyClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", DummyMigrator),
+            patch.object(tui_module, "Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
             sys_argv = sys.argv
             try:
                 sys.argv = [

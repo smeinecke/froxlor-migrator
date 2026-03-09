@@ -134,10 +134,14 @@ class MigratorAccountOpsTests(unittest.TestCase):
 
         ops = StubOps(target)
         ops.config = SimpleNamespace(behavior=SimpleNamespace(mailbox_exists="update"))
-        target._emails = [{"email": "a@x", "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14, "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}]
+        target._emails = [
+            {"email": "a@x", "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14, "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}
+        ]
         ops._mailbox_address = lambda mailbox: mailbox.get("email")
 
-        mailboxes = [{"email": "a@x", "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14, "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}]
+        mailboxes = [
+            {"email": "a@x", "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14, "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}
+        ]
         transferable = ops._ensure_mailboxes(1, mailboxes)
         self.assertEqual(["a@x"], transferable)
 
