@@ -40,6 +40,10 @@ class MigratorCore:
             redacted["password"] = "***"
         return redacted
 
+    def _allow_remote_mysql_fallback(self, database: str) -> bool:
+        panel_db = self.config.mysql.target_panel_database.strip().lower()
+        return database.strip().lower() != panel_db
+
     def _relative_customer_path(self, path: str, customer_login: str) -> str:
         cleaned = path.strip().strip("/")
         if not cleaned:
@@ -371,6 +375,10 @@ class MigratorCore:
                 database=database,
                 error=str(exc)[:400],
             )
+            if not self._allow_remote_mysql_fallback(database):
+                raise MigrationError(
+                    f"Target SQL query failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})"
+                ) from exc
             try:
                 output = self._run_target_mysql_via_remote_cli(sql, database)
                 rows: list[list[str]] = []
@@ -399,6 +407,10 @@ class MigratorCore:
                 error=str(exc)[:400],
                 connect_kwargs=connect_summary,
             )
+            if not self._allow_remote_mysql_fallback(database):
+                raise MigrationError(
+                    f"Target SQL execution failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})"
+                ) from exc
             try:
                 self._run_target_mysql_via_remote_cli(sql, database)
                 self._debug("target_sql_execution_fallback_remote_cli_success", database=database)

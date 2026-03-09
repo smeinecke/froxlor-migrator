@@ -164,6 +164,9 @@ class TransferRunner:
                 continue
         return target_ip in local_ips
 
+    def _needs_remote_sudo(self) -> bool:
+        return self.config.ssh.user.strip().lower() != "root"
+
     def ssh_transport(self):
         transport = self._ssh.transport()
         if transport is None:
@@ -193,7 +196,6 @@ class TransferRunner:
         include_database_tools: bool,
         include_mail_tools: bool,
     ) -> list[str]:
-        sudo = shlex.quote(self.config.commands.sudo)
         doveadm = shlex.quote(self.config.commands.doveadm)
         commands: list[str] = []
 
@@ -207,14 +209,15 @@ class TransferRunner:
             commands.append(f"command -v {shlex.quote(self.config.commands.mysqldump)}")
         if include_ssh and not self.dry_run:
             logger.debug("Running remote command preflight checks")
-            if not self._remote_command_available(self.config.commands.sudo):
+            if self._needs_remote_sudo() and not self._remote_command_available(self.config.commands.sudo):
                 raise TransferError(f"Remote command not found: {self.config.commands.sudo}")
             if include_database_tools and not self._remote_command_available(self.config.commands.mysql):
                 raise TransferError(f"Remote command not found: {self.config.commands.mysql}")
         if include_mail_tools:
-            commands.append(f"{sudo} {doveadm} process status >/dev/null 2>&1")
+            commands.append(f"{doveadm} process status >/dev/null 2>&1")
             if include_ssh and not self.dry_run:
-                remote_status = self._ssh.run(f"{sudo} {doveadm} process status >/dev/null 2>&1")
+                remote_sudo = f"{shlex.quote(self.config.commands.sudo)} " if self._needs_remote_sudo() else ""
+                remote_status = self._ssh.run(f"{remote_sudo}{doveadm} process status >/dev/null 2>&1")
                 if remote_status.returncode != 0:
                     raise TransferError("Remote doveadm preflight failed")
         return commands
@@ -273,11 +276,11 @@ class TransferRunner:
                 "Mailbox transfer requires running on the source mail host; "
                 "configured SSH target resolves to this local machine."
             )
-        sudo = shlex.quote(self.config.commands.sudo)
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_prefix = self._ssh_prefix()
-        remote = f"{ssh_prefix} {shlex.quote(self.config.commands.sudo + ' ' + self.config.commands.doveadm + ' dsync-server -u ' + mailbox)}"
-        command = f"{sudo} {doveadm} backup -u {shlex.quote(mailbox)} {remote}"
+        remote_sudo = f"{self.config.commands.sudo} " if self._needs_remote_sudo() else ""
+        remote = f"{ssh_prefix} {shlex.quote(remote_sudo + self.config.commands.doveadm + ' dsync-server -u ' + mailbox)}"
+        command = f"{doveadm} backup -u {shlex.quote(mailbox)} {remote}"
         logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
         self.run(command)
 

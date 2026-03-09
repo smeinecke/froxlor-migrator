@@ -18,11 +18,11 @@ from froxlor_migrator.config import (
 from froxlor_migrator.transfer import TransferError, TransferRunner
 
 
-def _config(manifest_dir: str) -> AppConfig:
+def _config(manifest_dir: str, ssh_user: str = "root") -> AppConfig:
     return AppConfig(
         source=ApiConfig(api_url="https://source.invalid/api.php", api_key="k", api_secret="s"),
         target=ApiConfig(api_url="https://target.invalid/api.php", api_key="k", api_secret="s"),
-        ssh=SshConfig(host="example.invalid", user="root", port=22, strict_host_key_checking=True),
+        ssh=SshConfig(host="example.invalid", user=ssh_user, port=22, strict_host_key_checking=True),
         paths=PathsConfig(source_web_root="/src", source_transfer_root="/src", target_web_root="/dst"),
         mysql=MysqlConfig(source_panel_database="froxlor", target_panel_database="froxlor"),
         commands=CommandsConfig(),
@@ -125,6 +125,46 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertEqual(1, len(runner.commands))
             self.assertIn("doveadm backup -u info@example.test", runner.commands[0])
             self.assertIn("dsync-server -u info@example.test", runner.commands[0])
+
+    def test_preflight_mail_tools_do_not_use_local_sudo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir), dry_run=True, manifest_name="preflight")
+            commands = runner.preflight_commands(include_ssh=False, include_database_tools=False, include_mail_tools=True)
+            self.assertIn("doveadm process status >/dev/null 2>&1", commands)
+            self.assertTrue(all(not cmd.startswith("sudo ") for cmd in commands))
+
+    def test_preflight_mail_tools_skip_remote_sudo_for_root_user(self) -> None:
+        class SshStub:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def run(self, command: str):
+                self.commands.append(command)
+                return type("Result", (), {"returncode": 0})()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir, ssh_user="root"), dry_run=False, manifest_name="preflight")
+            ssh = SshStub()
+            runner._ssh = ssh  # type: ignore[assignment]
+            runner.preflight_commands(include_ssh=True, include_database_tools=False, include_mail_tools=True)
+            self.assertIn("doveadm process status >/dev/null 2>&1", ssh.commands)
+            self.assertTrue(all(not cmd.startswith("sudo ") for cmd in ssh.commands))
+
+    def test_preflight_mail_tools_use_remote_sudo_for_non_root_user(self) -> None:
+        class SshStub:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def run(self, command: str):
+                self.commands.append(command)
+                return type("Result", (), {"returncode": 0})()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir, ssh_user="deploy"), dry_run=False, manifest_name="preflight")
+            ssh = SshStub()
+            runner._ssh = ssh  # type: ignore[assignment]
+            runner.preflight_commands(include_ssh=True, include_database_tools=False, include_mail_tools=True)
+            self.assertIn("sudo doveadm process status >/dev/null 2>&1", ssh.commands)
 
 
 if __name__ == "__main__":
