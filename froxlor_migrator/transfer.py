@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
+from cachetools import LRUCache, cached
+
 from .config import AppConfig
 from .ssh_driver import SshDriver
 from .util import ensure_dir
@@ -281,6 +283,7 @@ class TransferRunner:
         logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
         self.run(command)
 
+    @cached(LRUCache(maxsize=32))
     def read_remote_file(self, path: str) -> str:
         if self.dry_run:
             return ""
