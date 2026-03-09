@@ -63,6 +63,9 @@ addopts = [
     "--cov-report=xml",
 ]
 pythonpath = ["."]
+norecursedirs = [
+    "testing/data",
+]
 
 [tool.vulture]
 exclude = ["dist", "build", "venv", ".venv", "tests", "docs"]

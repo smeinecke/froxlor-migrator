@@ -1,3 +1,7 @@
 {
-    "python.languageServer": "None"
+    "python.languageServer": "None",
+    "chat.tools.terminal.autoApprove": {
+        "pytest": true,
+        "uv": true
+    }
 }

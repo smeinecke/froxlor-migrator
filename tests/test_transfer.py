@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from froxlor_migrator.config import (
     ApiConfig,
@@ -18,16 +19,27 @@ from froxlor_migrator.config import (
 from froxlor_migrator.transfer import TransferError, TransferRunner
 
 
-def _config(manifest_dir: str, ssh_user: str = "root") -> AppConfig:
+def _config(
+    manifest_dir: str,
+    *,
+    ssh_user: str = "root",
+    ssh_host: str = "example.invalid",
+    ssh_port: int = 22,
+    strict_host_key_checking: bool = True,
+    commands: CommandsConfig | None = None,
+    paths: PathsConfig | None = None,
+    behavior: BehaviorConfig | None = None,
+    output: OutputConfig | None = None,
+) -> AppConfig:
     return AppConfig(
         source=ApiConfig(api_url="https://source.invalid/api.php", api_key="k", api_secret="s"),
         target=ApiConfig(api_url="https://target.invalid/api.php", api_key="k", api_secret="s"),
-        ssh=SshConfig(host="example.invalid", user=ssh_user, port=22, strict_host_key_checking=True),
-        paths=PathsConfig(source_web_root="/src", source_transfer_root="/src", target_web_root="/dst"),
+        ssh=SshConfig(host=ssh_host, user=ssh_user, port=ssh_port, strict_host_key_checking=strict_host_key_checking),
+        paths=paths or PathsConfig(source_web_root="/src", source_transfer_root="/src", target_web_root="/dst"),
         mysql=MysqlConfig(source_panel_database="froxlor", target_panel_database="froxlor"),
-        commands=CommandsConfig(),
-        behavior=BehaviorConfig(),
-        output=OutputConfig(manifest_dir=manifest_dir),
+        commands=commands or CommandsConfig(),
+        behavior=behavior or BehaviorConfig(),
+        output=output or OutputConfig(manifest_dir=manifest_dir),
     )
 
 
@@ -165,6 +177,102 @@ class TransferRunnerTests(unittest.TestCase):
             runner._ssh = ssh  # type: ignore[assignment]
             runner.preflight_commands(include_ssh=True, include_database_tools=False, include_mail_tools=True)
             self.assertIn("sudo doveadm process status >/dev/null 2>&1", ssh.commands)
+
+    def test_select_file_transfer_codec_prefers_available_tools_and_caches_result(self) -> None:
+        class CodecRunner(TransferRunner):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.local: dict[str, bool] = {}
+                self.remote: dict[str, bool] = {}
+
+            def _command_available(self, command: str) -> bool:  # noqa: ARG002
+                return self.local.get(command, False)
+
+            def _remote_command_available(self, command: str) -> bool:  # noqa: ARG002
+                return self.remote.get(command, False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = CodecRunner(config=_config(tmpdir), dry_run=True, manifest_name="codec")
+            runner.local[runner.config.commands.pzstd] = True
+            runner.remote[runner.config.commands.pzstd] = True
+            codec = runner._select_file_transfer_codec()
+            self.assertIn("pzstd", codec[0])
+            self.assertIn("pzstd", codec[1])
+
+            runner.local[runner.config.commands.pzstd] = False
+            runner.remote[runner.config.commands.pzstd] = False
+            self.assertEqual(codec, runner._select_file_transfer_codec())
+
+            runner = CodecRunner(config=_config(tmpdir), dry_run=True, manifest_name="codec2")
+            runner.local[runner.config.commands.pigz] = True
+            runner.remote[runner.config.commands.pigz] = True
+            codec = runner._select_file_transfer_codec()
+            self.assertIn("pigz", codec[0])
+            self.assertIn("pigz", codec[1])
+
+            runner = CodecRunner(config=_config(tmpdir), dry_run=True, manifest_name="codec3")
+            codec = runner._select_file_transfer_codec()
+            self.assertEqual(("", ""), codec)
+
+    def test_ssh_prefix_includes_expected_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = _config(
+                tmpdir,
+                ssh_user="deploy",
+                ssh_host="remote.example",
+                ssh_port=2222,
+                strict_host_key_checking=False,
+            )
+            runner = TransferRunner(config=cfg, dry_run=True, manifest_name="prefix")
+            prefix = runner._ssh_prefix()
+            self.assertIn("StrictHostKeyChecking=no", prefix)
+            self.assertIn("UserKnownHostsFile=/dev/null", prefix)
+            self.assertIn("-p 2222", prefix)
+            self.assertIn("-l deploy", prefix)
+            self.assertIn("remote.example", prefix)
+
+    def test_ssh_target_is_local_matches_hostname(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir), dry_run=True, manifest_name="local")
+            with (
+                mock.patch("froxlor_migrator.transfer.socket.gethostname", return_value="example.invalid"),
+                mock.patch("froxlor_migrator.transfer.socket.getfqdn", return_value="example.invalid"),
+                mock.patch("froxlor_migrator.transfer.socket.gethostbyname", return_value="203.0.113.1"),
+                mock.patch(
+                    "froxlor_migrator.transfer.socket.gethostbyname_ex",
+                    return_value=("example.invalid", [], ["203.0.113.1"]),
+                ),
+            ):
+                self.assertTrue(runner._ssh_target_is_local())
+
+    def test_ssh_target_is_local_returns_false_for_remote_host(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = _config(tmpdir, ssh_host="remote.example")
+            runner = TransferRunner(config=cfg, dry_run=True, manifest_name="remote")
+            with (
+                mock.patch("froxlor_migrator.transfer.socket.gethostname", return_value="example.invalid"),
+                mock.patch("froxlor_migrator.transfer.socket.getfqdn", return_value="example.invalid"),
+                mock.patch("froxlor_migrator.transfer.socket.gethostbyname", return_value="198.51.100.10"),
+                mock.patch(
+                    "froxlor_migrator.transfer.socket.gethostbyname_ex",
+                    return_value=("example.invalid", [], ["203.0.113.1"]),
+                ),
+            ):
+                self.assertFalse(runner._ssh_target_is_local())
+
+    def test_needs_remote_sudo_depends_on_user(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir, ssh_user="deploy"), dry_run=True, manifest_name="sudo")
+            self.assertTrue(runner._needs_remote_sudo())
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir, ssh_user="root"), dry_run=True, manifest_name="sudo")
+            self.assertFalse(runner._needs_remote_sudo())
+
+    def test_truncate_output_appends_suffix_when_limit_exceeded(self) -> None:
+        value = "x" * 10
+        truncated = TransferRunner._truncate_output(value, limit=5)
+        self.assertTrue(truncated.endswith("...[truncated]..."))
 
 
 if __name__ == "__main__":

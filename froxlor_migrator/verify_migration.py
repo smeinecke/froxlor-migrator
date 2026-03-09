@@ -218,6 +218,11 @@ def _compare_domain(
             as_int(pick(source_row, "deactivated", default=0)),
             as_int(pick(target_row, "deactivated", default=0)),
         ),
+        (
+            "selectserveralias",
+            as_int(pick(source_row, "wwwserveralias", "selectserveralias", default=0)),
+            as_int(pick(target_row, "wwwserveralias", "selectserveralias", default=0)),
+        ),
     ]
     for field, src, dst in checks:
         if src != dst:
