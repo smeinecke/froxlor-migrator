@@ -272,10 +272,7 @@ class TransferRunner:
 
     def transfer_mailbox(self, mailbox: str) -> None:
         if self._ssh_target_is_local():
-            raise TransferError(
-                "Mailbox transfer requires running on the source mail host; "
-                "configured SSH target resolves to this local machine."
-            )
+            raise TransferError("Mailbox transfer requires running on the source mail host; configured SSH target resolves to this local machine.")
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_prefix = self._ssh_prefix()
         remote_sudo = f"{self.config.commands.sudo} " if self._needs_remote_sudo() else ""

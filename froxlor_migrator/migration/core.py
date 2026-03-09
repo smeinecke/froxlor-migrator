@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
+import subprocess
 import tempfile
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -295,6 +298,26 @@ class MigratorCore:
     def _target_mysql_connect_kwargs(self) -> Iterator[dict[str, Any]]:
         creds = self._target_sql_root()
         kwargs = connect_kwargs_from_credentials(creds)
+        socket_path = str(kwargs.get("unix_socket", "")).strip()
+        if socket_path:
+            self._debug(
+                "opening_target_mysql_socket_tunnel",
+                remote_socket=socket_path,
+                user=str(kwargs.get("user", "")),
+            )
+            with self._open_ssh_unix_socket_tunnel(socket_path) as local_socket:
+                tunneled = dict(kwargs)
+                tunneled.pop("host", None)
+                tunneled.pop("port", None)
+                tunneled["unix_socket"] = local_socket
+                self._debug(
+                    "target_mysql_socket_tunnel_ready",
+                    local_socket=local_socket,
+                    connect_kwargs=self._redact_connect_kwargs(tunneled),
+                )
+                yield tunneled
+            return
+
         remote_host = str(kwargs.get("host", "localhost"))
         remote_port = int(kwargs.get("port", 3306))
         self._debug(
@@ -317,6 +340,50 @@ class MigratorCore:
                 connect_kwargs=self._redact_connect_kwargs(tunneled),
             )
             yield tunneled
+
+    @contextmanager
+    def _open_ssh_unix_socket_tunnel(self, remote_socket: str) -> Iterator[str]:
+        with tempfile.TemporaryDirectory(prefix="froxlor-mysql-sock-") as tmpdir:
+            local_socket = os.path.join(tmpdir, "mysql.sock")
+            cmd = shlex.split(self.config.commands.ssh)
+            if not cmd:
+                raise MigrationError("SSH command is empty; cannot open unix socket tunnel")
+            if not self.config.ssh.strict_host_key_checking:
+                cmd.extend(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
+            cmd.extend([
+                "-N",
+                "-L",
+                f"{local_socket}:{remote_socket}",
+                "-p",
+                str(self.config.ssh.port),
+                "-l",
+                self.config.ssh.user,
+                self.config.ssh.host,
+            ])
+
+            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+            try:
+                ready = False
+                for _ in range(50):
+                    if process.poll() is not None:
+                        break
+                    if os.path.exists(local_socket):
+                        ready = True
+                        break
+                    time.sleep(0.1)
+                if not ready:
+                    stderr_text = ""
+                    if process.stderr is not None:
+                        stderr_text = process.stderr.read().strip()
+                    raise MigrationError(f"Could not establish SSH unix socket tunnel for MySQL: {stderr_text[:300]}")
+                yield local_socket
+            finally:
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except Exception:
+                        process.kill()
 
     def _run_target_mysql_via_remote_cli(self, sql: str, database: str) -> str:
         suffix = uuid4().hex[:8]
@@ -376,9 +443,7 @@ class MigratorCore:
                 error=str(exc)[:400],
             )
             if not self._allow_remote_mysql_fallback(database):
-                raise MigrationError(
-                    f"Target SQL query failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})"
-                ) from exc
+                raise MigrationError(f"Target SQL query failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})") from exc
             try:
                 output = self._run_target_mysql_via_remote_cli(sql, database)
                 rows: list[list[str]] = []
@@ -408,9 +473,7 @@ class MigratorCore:
                 connect_kwargs=connect_summary,
             )
             if not self._allow_remote_mysql_fallback(database):
-                raise MigrationError(
-                    f"Target SQL execution failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})"
-                ) from exc
+                raise MigrationError(f"Target SQL execution failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})") from exc
             try:
                 self._run_target_mysql_via_remote_cli(sql, database)
                 self._debug("target_sql_execution_fallback_remote_cli_success", database=database)
