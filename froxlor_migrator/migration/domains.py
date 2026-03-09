@@ -210,6 +210,9 @@ class MigratorDomainOps:
 
         payload = {
             "customerid": target_customer_id,
+            "loginname": customer_login,
+            "adminid": as_int(pick(domain, "adminid", default=0)),
+            "is_stdsubdomain": bool(as_int(pick(domain, "is_stdsubdomain", default=0))),
             "documentroot": target_docroot,
             "isemaildomain": bool(as_int(pick(domain, "isemaildomain", default=0))),
             "email_only": bool(as_int(pick(domain, "email_only", default=0))),

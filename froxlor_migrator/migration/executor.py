@@ -120,29 +120,33 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
 
         db_map: dict[str, str] = {}
         if selection.include_databases and selection.databases:
-            _status("Synchronizing MySQL prefix")
-            self._sync_target_mysql_prefix_setting()
-            _advance("MySQL prefix synchronized")
-            known_before = {
-                str(pick(item, "databasename", "dbname", "database", default=""))
-                for item in self.target.list_mysqls()
-                if str(pick(item, "databasename", "dbname", "database", default=""))
-            }
-            for source_db in selection.databases:
-                source_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
-                target_name = self._create_database_on_target(target_customer_id, source_db, known_before)
-                if selection.validate_database_names and source_name != target_name:
-                    raise MigrationError(
-                        f"Database name mismatch: source={source_name!r} target={target_name!r}; preserving identical DB logins requires matching names"
-                    )
-                known_before.add(target_name)
-                db_map[source_name] = target_name
-                _status(f"Transferring database: {source_name}")
-                self._transfer_database_with_defaults(source_name, target_name)
-                _advance(f"Database migrated: {source_name}")
-            _status("Synchronizing database login hashes")
-            self._sync_database_login_hashes(db_map)
-            _advance("Database login hashes synchronized")
+            # Keep the SSH tunnel open for the duration of database-related operations
+            # to avoid reconnecting on every single query.
+            with self._target_mysql_connect_kwargs():
+                _status("Synchronizing MySQL prefix")
+                self._sync_target_mysql_prefix_setting()
+                _advance("MySQL prefix synchronized")
+
+                known_before = {
+                    str(pick(item, "databasename", "dbname", "database", default=""))
+                    for item in self.target.list_mysqls()
+                    if str(pick(item, "databasename", "dbname", "database", default=""))
+                }
+                for source_db in selection.databases:
+                    source_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
+                    target_name = self._create_database_on_target(target_customer_id, source_db, known_before)
+                    if selection.validate_database_names and source_name != target_name:
+                        raise MigrationError(
+                            f"Database name mismatch: source={source_name!r} target={target_name!r}; preserving identical DB logins requires matching names"
+                        )
+                    known_before.add(target_name)
+                    db_map[source_name] = target_name
+                    _status(f"Transferring database: {source_name}")
+                    self._transfer_database_with_defaults(source_name, target_name)
+                    _advance(f"Database migrated: {source_name}")
+                _status("Synchronizing database login hashes")
+                self._sync_database_login_hashes(db_map)
+                _advance("Database login hashes synchronized")
 
         transferable_mailboxes: list[str] = []
         if selection.mailboxes:

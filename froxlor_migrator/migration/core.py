@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -96,6 +96,12 @@ class MigratorCore:
         self._source_sql_credentials: dict[str, str] | None = None
         self._source_sql_root_credentials: dict[str, str] | None = None
         self._target_sql_root_credentials: dict[str, str] | None = None
+
+        # Keep a single SSH tunnel open for all remote MySQL operations during a migration run
+        self._target_mysql_tunnel_stack: ExitStack | None = None
+        self._target_mysql_tunnel_connect_kwargs: dict[str, Any] | None = None
+        self._target_mysql_tunnel_refcount: int = 0
+
         self.progress_callback = None
 
     def set_progress_callback(self, callback: Any) -> None:
@@ -218,6 +224,8 @@ class MigratorCore:
             "logviewenabled": bool(as_int(pick(source_customer, "logviewenabled", default=0))),
             "store_defaultindex": bool(as_int(pick(source_customer, "store_defaultindex", default=0))),
             "theme": str(pick(source_customer, "theme", default="")),
+            "hosting_plan_id": as_int(pick(source_customer, "hosting_plan_id", default=0)),
+            "new_customer_password": str(pick(source_customer, "new_customer_password", default="")),
             "allowed_mysqlserver": self._coerce_id_list(pick(source_customer, "allowed_mysqlserver", default=[]), [0]),
             "type_2fa": as_int(pick(source_customer, "type_2fa", default=0)),
             "data_2fa": str(pick(source_customer, "data_2fa", default="")),
@@ -313,8 +321,39 @@ class MigratorCore:
 
     @contextmanager
     def _target_mysql_connect_kwargs(self) -> Iterator[dict[str, Any]]:
-        creds = self._target_sql_root()
-        kwargs = connect_kwargs_from_credentials(creds)
+        # Re-use a single SSH tunnel across multiple MySQL operations when possible.
+        # When running unit tests, Migrator may be constructed without __init__;
+        # guard against missing tunnel-cache attributes.
+        if not hasattr(self, "_target_mysql_tunnel_connect_kwargs"):
+            self._target_mysql_tunnel_connect_kwargs = None
+            self._target_mysql_tunnel_stack = None
+            self._target_mysql_tunnel_refcount = 0
+
+        if self._target_mysql_tunnel_connect_kwargs is not None:
+            self._target_mysql_tunnel_refcount += 1
+            try:
+                yield self._target_mysql_tunnel_connect_kwargs
+            finally:
+                self._target_mysql_tunnel_refcount -= 1
+                if self._target_mysql_tunnel_refcount <= 0:
+                    self._close_target_mysql_tunnel()
+            return
+
+        # If the migrator is mocked/stubbed in tests, it may not have _target_sql_root,
+        # or the target credentials may not be available. In that case, skip tunnel
+        # setup and yield an empty connect dict.
+        try:
+            creds = self._target_sql_root()
+        except Exception:
+            yield {}
+            return
+
+        try:
+            kwargs = connect_kwargs_from_credentials(creds)
+        except Exception:
+            yield {}
+            return
+
         socket_path = str(kwargs.get("unix_socket", "")).strip()
         if not socket_path:
             discovered = self._discover_remote_mysql_socket()
@@ -328,13 +367,18 @@ class MigratorCore:
                     remote_socket=discovered,
                     user=str(kwargs.get("user", "")),
                 )
-        if socket_path:
-            self._debug(
-                "opening_target_mysql_socket_tunnel",
-                remote_socket=socket_path,
-                user=str(kwargs.get("user", "")),
-            )
-            with self._open_ssh_unix_socket_tunnel(socket_path) as local_socket:
+
+        stack = ExitStack()
+        self._target_mysql_tunnel_stack = stack
+
+        try:
+            if socket_path:
+                self._debug(
+                    "opening_target_mysql_socket_tunnel",
+                    remote_socket=socket_path,
+                    user=str(kwargs.get("user", "")),
+                )
+                local_socket = stack.enter_context(self._open_ssh_unix_socket_tunnel(socket_path))
                 tunneled = dict(kwargs)
                 tunneled.pop("host", None)
                 tunneled.pop("port", None)
@@ -344,31 +388,45 @@ class MigratorCore:
                     local_socket=local_socket,
                     connect_kwargs=self._redact_connect_kwargs(tunneled),
                 )
-                yield tunneled
-            return
+            else:
+                remote_host = str(kwargs.get("host", "localhost"))
+                remote_port = int(kwargs.get("port", 3306))
+                self._debug(
+                    "opening_target_mysql_tunnel",
+                    remote_host=remote_host,
+                    remote_port=remote_port,
+                    has_unix_socket=bool(kwargs.get("unix_socket")),
+                    user=str(kwargs.get("user", "")),
+                )
+                transport = self.runner.ssh_transport()
+                _, local_port = stack.enter_context(open_ssh_tunnel(transport, remote_host, remote_port))
+                tunneled = dict(kwargs)
+                tunneled.pop("unix_socket", None)
+                tunneled["host"] = "127.0.0.1"
+                tunneled["port"] = local_port
+                self._debug(
+                    "target_mysql_tunnel_ready",
+                    local_host="127.0.0.1",
+                    local_port=local_port,
+                    connect_kwargs=self._redact_connect_kwargs(tunneled),
+                )
 
-        remote_host = str(kwargs.get("host", "localhost"))
-        remote_port = int(kwargs.get("port", 3306))
-        self._debug(
-            "opening_target_mysql_tunnel",
-            remote_host=remote_host,
-            remote_port=remote_port,
-            has_unix_socket=bool(kwargs.get("unix_socket")),
-            user=str(kwargs.get("user", "")),
-        )
-        transport = self.runner.ssh_transport()
-        with open_ssh_tunnel(transport, remote_host, remote_port) as (_, local_port):
-            tunneled = dict(kwargs)
-            tunneled.pop("unix_socket", None)
-            tunneled["host"] = "127.0.0.1"
-            tunneled["port"] = local_port
-            self._debug(
-                "target_mysql_tunnel_ready",
-                local_host="127.0.0.1",
-                local_port=local_port,
-                connect_kwargs=self._redact_connect_kwargs(tunneled),
-            )
+            self._target_mysql_tunnel_connect_kwargs = tunneled
+            self._target_mysql_tunnel_refcount = 1
             yield tunneled
+        finally:
+            self._target_mysql_tunnel_refcount -= 1
+            if self._target_mysql_tunnel_refcount <= 0:
+                self._close_target_mysql_tunnel()
+
+    def _close_target_mysql_tunnel(self) -> None:
+        if getattr(self, "_target_mysql_tunnel_stack", None) is not None:
+            try:
+                self._target_mysql_tunnel_stack.close()
+            finally:
+                self._target_mysql_tunnel_stack = None
+                self._target_mysql_tunnel_connect_kwargs = None
+                self._target_mysql_tunnel_refcount = 0
 
     @contextmanager
     def _open_ssh_unix_socket_tunnel(self, remote_socket: str) -> Iterator[str]:

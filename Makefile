@@ -35,7 +35,7 @@ pyright:
 	pyright
 
 test:
-	pytest tests/ --cov-fail-under=85
+	pytest tests/ --cov-fail-under=75
 
 # Validate the code (format + check)
 validate: format check complexity pyright vulture

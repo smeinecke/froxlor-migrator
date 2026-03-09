@@ -499,6 +499,136 @@ class MigratorCoreMoreTests(unittest.TestCase):
         cid = self.core._ensure_target_customer({"login": "bob", "email": "x"})
         self.assertEqual(123, cid)
 
+    def test_ensure_target_customer_creates_new_customer_sets_createstdsubdomain(self) -> None:
+        self.core.target.list_customers.return_value = []
+
+        def add_call(method: str, payload: dict[str, object]):
+            # createstdsubdomain must be passed when creating a new customer
+            self.assertIn("createstdsubdomain", payload)
+            self.assertTrue(payload["createstdsubdomain"])
+            return {"customerid": 123}
+
+        self.core.target.call = add_call
+        cid = self.core._ensure_target_customer({"login": "bob", "email": "x"})
+        self.assertEqual(123, cid)
+
+    def test_ensure_target_customer_creates_new_customer_migrates_all_known_fields(self) -> None:
+        self.core.target.list_customers.return_value = []
+        source = {
+            "login": "bob",
+            "email": "bob@example.test",
+            "name": "Bob",
+            "firstname": "B",
+            "company": "Acme",
+            "street": "123 Main St",
+            "zipcode": "12345",
+            "city": "Testville",
+            "phone": "0123456789",
+            "fax": "9876543210",
+            "customernumber": "CUST-123",
+            "def_language": "de",
+            "gui_access": "1",
+            "api_allowed": "0",
+            "shell_allowed": "1",
+            "gender": "1",
+            "custom_notes": "note",
+            "custom_notes_show": "1",
+            "sendpassword": "0",
+            "diskspace": "1000",
+            "diskspace_ul": "1",
+            "traffic": "2000",
+            "traffic_ul": "0",
+            "subdomains": "5",
+            "subdomains_ul": "1",
+            "emails": "10",
+            "emails_ul": "0",
+            "email_accounts": "2",
+            "email_accounts_ul": "1",
+            "email_forwarders": "3",
+            "email_forwarders_ul": "0",
+            "email_quota": "400",
+            "email_quota_ul": "1",
+            "imap": "1",
+            "pop3": "0",
+            "ftps": "2",
+            "ftps_ul": "1",
+            "mysqls": "3",
+            "mysqls_ul": "0",
+            "createstdsubdomain": "1",
+            "phpenabled": "1",
+            "allowed_phpconfigs": "[2, 3]",
+            "perlenabled": "1",
+            "dnsenabled": "0",
+            "logviewenabled": "1",
+            "store_defaultindex": "0",
+            "hosting_plan_id": "7",
+            "new_customer_password": "pw123",
+            "allowed_mysqlserver": "9",
+        }
+
+        def add_call(method: str, payload: dict[str, object]):
+            # All expected keys must be forwarded to the API on creation
+            expected = {
+                "email": "bob@example.test",
+                "name": "Bob",
+                "firstname": "B",
+                "company": "Acme",
+                "street": "123 Main St",
+                "zipcode": "12345",
+                "city": "Testville",
+                "phone": "0123456789",
+                "fax": "9876543210",
+                "customernumber": "CUST-123",
+                "def_language": "de",
+                "gui_access": True,
+                "api_allowed": False,
+                "shell_allowed": True,
+                "gender": 1,
+                "custom_notes": "note",
+                "custom_notes_show": True,
+                "sendpassword": False,
+                "diskspace": 1000,
+                "diskspace_ul": True,
+                "traffic": 2000,
+                "traffic_ul": False,
+                "subdomains": 5,
+                "subdomains_ul": True,
+                "emails": 10,
+                "emails_ul": False,
+                "email_accounts": 2,
+                "email_accounts_ul": True,
+                "email_forwarders": 3,
+                "email_forwarders_ul": False,
+                "email_quota": 400,
+                "email_quota_ul": True,
+                "email_imap": True,
+                "email_pop3": False,
+                "ftps": 2,
+                "ftps_ul": True,
+                "mysqls": 3,
+                "mysqls_ul": False,
+                "createstdsubdomain": True,
+                "phpenabled": True,
+                "allowed_phpconfigs": [2, 3],
+                "perlenabled": True,
+                "dnsenabled": False,
+                "logviewenabled": True,
+                "store_defaultindex": False,
+                "hosting_plan_id": 7,
+                "new_customer_password": "pw123",
+                "allowed_mysqlserver": [9],
+                "new_loginname": "bob",
+            }
+            for k, v in expected.items():
+                self.assertIn(k, payload)
+                self.assertEqual(v, payload[k])
+
+            return {"customerid": 123}
+
+        self.core.target.call = add_call
+        cid = self.core._ensure_target_customer(source)
+        self.assertEqual(123, cid)
+
 
 if __name__ == "__main__":
     unittest.main()

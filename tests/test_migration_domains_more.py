@@ -122,6 +122,136 @@ class MigratorDomainOpsTests(unittest.TestCase):
         ops._ensure_domains(1, [{"domain": "example.com", "documentroot": "/var/www"}], {}, {}, {}, "user")
         self.assertTrue(any(m == "Domains.update" for m, _ in calls))
 
+    def test_domain_payload_includes_all_expected_fields(self) -> None:
+        ops = DummyDomainOps()
+        # Set up mapping so ipandport and ssl_ipandport are included
+        php_setting_map = {5: 10}
+        ip_mapping = {1: 100}
+        ip_value_mapping = {"1.1.1.1": "2.2.2.2"}
+
+        domain = {
+            "domain": "example.com",
+            "customerid": 42,
+            "adminid": 77,
+            "is_stdsubdomain": "1",
+            "documentroot": "/var/www/customer/site",
+            "isemaildomain": "1",
+            "email_only": "1",
+            "phpenabled": "1",
+            "sslenabled": "0",
+            "specialsettings": "foo",
+            "ssl_specialsettings": "bar",
+            "include_specialsettings": "1",
+            "ssl_redirect": "1",
+            "openbasedir": "0",
+            "openbasedir_path": "/tmp",
+            "notryfiles": "1",
+            "writeaccesslog": "0",
+            "writeerrorlog": "0",
+            "http2": "1",
+            "http3": "0",
+            "hsts": "123",
+            "hsts_sub": "1",
+            "hsts_preload": "1",
+            "ocsp_stapling": "1",
+            "override_tls": "1",
+            "ssl_protocols": "TLSv1.3",
+            "ssl_cipher_list": "cipher",
+            "tlsv13_cipher_list": "cipher13",
+            "ssl_honorcipherorder": "1",
+            "ssl_sessiontickets": "0",
+            "description": "desc",
+            "wwwserveralias": "1",
+            "subcanemaildomain": "1",
+            "speciallogfile": "1",
+            "alias": "1",
+            "registration_date": "2021-01-01",
+            "termination_date": "2022-01-01",
+            "caneditdomain": "1",
+            "isbinddomain": "1",
+            "zonefile": "A 1.1.1.1",
+            "dkim": "1",
+            "specialsettingsforsubdomains": "1",
+            "phpsettingsforsubdomains": "1",
+            "phpsettingid": "5",
+            "mod_fcgid_starter": "10",
+            "mod_fcgid_maxrequests": "20",
+            "dont_use_default_ssl_ipandport_if_empty": "1",
+            "deactivated": "1",
+            "ipsandports": [{"id": 1, "ssl": 1}],
+        }
+
+        name, docroot, payload, mapped_ip_ids = ops._domain_payload(
+            target_customer_id=42,
+            domain=domain,
+            customer_login="bob",
+            php_setting_map=php_setting_map,
+            ip_mapping=ip_mapping,
+            ip_value_mapping=ip_value_mapping,
+        )
+
+        self.assertEqual("example.com", name)
+        self.assertEqual("/var/www/customer/site", docroot)
+        self.assertEqual([100], mapped_ip_ids)
+
+        expected = {
+            "customerid": 42,
+            "loginname": "bob",
+            "adminid": 77,
+            "is_stdsubdomain": True,
+            "documentroot": "/var/www/customer/site",
+            "isemaildomain": True,
+            "email_only": True,
+            "phpenabled": True,
+            "sslenabled": False,
+            "letsencrypt": False,
+            "specialsettings": "foo",
+            "ssl_specialsettings": "bar",
+            "include_specialsettings": True,
+            "ssl_redirect": True,
+            "openbasedir": False,
+            "openbasedir_path": "/tmp",
+            "notryfiles": True,
+            "writeaccesslog": False,
+            "writeerrorlog": False,
+            "http2": True,
+            "http3": False,
+            "hsts_maxage": 123,
+            "hsts_sub": True,
+            "hsts_preload": True,
+            "ocsp_stapling": True,
+            "override_tls": True,
+            "ssl_protocols": "TLSv1.3",
+            "ssl_cipher_list": "cipher",
+            "tlsv13_cipher_list": "cipher13",
+            "honorcipherorder": True,
+            "sessiontickets": False,
+            "description": "desc",
+            "selectserveralias": 1,
+            "subcanemaildomain": 1,
+            "speciallogfile": True,
+            "alias": 1,
+            "registration_date": "2021-01-01",
+            "termination_date": "2022-01-01",
+            "caneditdomain": True,
+            "isbinddomain": True,
+            "zonefile": "A 2.2.2.2",
+            "dkim": True,
+            "specialsettingsforsubdomains": True,
+            "phpsettingsforsubdomains": True,
+            "phpsettingid": 10,
+            "mod_fcgid_starter": 10,
+            "mod_fcgid_maxrequests": 20,
+            "dont_use_default_ssl_ipandport_if_empty": True,
+            "deactivated": True,
+            "ipandport": [{"id": 100}],
+            "ssl_ipandport": [{"id": 100}],
+        }
+
+        for key, expected_value in expected.items():
+            self.assertIn(key, payload)
+            self.assertEqual(expected_value, payload[key])
+
     def test_ensure_domains_handles_letsencrypt_fallback(self) -> None:
         # _domain_payload currently sets letsencrypt False, so this is mostly a
         # regression guard: even if FroxlorApiError is thrown, it should attempt
