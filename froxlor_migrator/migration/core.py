@@ -34,7 +34,12 @@ from .types import MigrationError, ResourceRow, Selection
 
 class MigratorCore:
     def _debug(self, message: str, **payload: Any) -> None:
-        self.runner.debug_event(message, **payload)
+        # Some unit tests create Migrator/MigratorCore objects without a runner.
+        # In that case, skip debug calls rather than raising AttributeError.
+        runner = getattr(self, "runner", None)
+        if runner is None:
+            return
+        runner.debug_event(message, **payload)
 
     @staticmethod
     def _redact_connect_kwargs(connect_kwargs: dict[str, Any]) -> dict[str, Any]:
@@ -420,9 +425,10 @@ class MigratorCore:
                 self._close_target_mysql_tunnel()
 
     def _close_target_mysql_tunnel(self) -> None:
-        if getattr(self, "_target_mysql_tunnel_stack", None) is not None:
+        stack = getattr(self, "_target_mysql_tunnel_stack", None)
+        if stack is not None:
             try:
-                self._target_mysql_tunnel_stack.close()
+                stack.close()
             finally:
                 self._target_mysql_tunnel_stack = None
                 self._target_mysql_tunnel_connect_kwargs = None
@@ -703,11 +709,13 @@ class MigratorCore:
         source_hashes = self._load_source_mail_password_hashes(mailboxes)
         statements: list[str] = []
         for mailbox in mailboxes:
-            emailaddr = self._mailbox_address(mailbox)
+            emailaddr = self._mailbox_address(mailbox).lower()
             if not emailaddr:
                 continue
             if emailaddr not in source_hashes:
-                raise MigrationError(f"Source mailbox login hash missing in mail_users table: {emailaddr}")
+                # This can happen for forward-only addresses that have no mail_users entry.
+                self._debug("skip_mailbox_without_source_hash", email=emailaddr)
+                continue
             password_hash, password_enc = source_hashes[emailaddr]
             if not password_hash and not password_enc:
                 raise MigrationError(f"Source mailbox login hash empty for: {emailaddr}")

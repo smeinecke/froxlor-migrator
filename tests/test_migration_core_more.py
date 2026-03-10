@@ -176,16 +176,18 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.core._sync_ftp_password_hashes(2, [{"username": "u", "password": "hash"}])
         self.assertIn("UPDATE ftp_users", getattr(self, "executed_sql", ""))
 
-    def test_sync_mail_password_hashes_fails_on_missing_and_empty(self) -> None:
+    def test_sync_mail_password_hashes_skips_missing_source_hash_and_errors_on_empty(self) -> None:
         self.core._run_source_panel_query = lambda sql: [["u@example.com", "", ""]]
         self.core._exec_target_panel_sql = lambda sql: setattr(self, "executed_mail_sql", sql)
 
-        with self.assertRaises(MigrationError):
-            self.core._sync_mail_password_hashes(1, [{"email": "u2@example.com"}])
+        # Missing source hash is allowed (e.g. forward-only addresses) and should be skipped.
+        self.core._sync_mail_password_hashes(1, [{"email": "u2@example.com"}])
 
+        # Empty hashes should still be treated as an error.
         with self.assertRaises(MigrationError):
             self.core._sync_mail_password_hashes(1, [{"email": "u@example.com"}])
 
+        # Valid hash should be applied.
         self.core._run_source_panel_query = lambda sql: [["u@example.com", "p", "e"]]
         self.core._sync_mail_password_hashes(1, [{"email": "u@example.com"}])
         self.assertIn("UPDATE mail_users", getattr(self, "executed_mail_sql", ""))
@@ -247,7 +249,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertEqual(11, found["customerid"])
 
     def test_ensure_target_customer_raises_when_preselected_has_no_id(self) -> None:
-        with self.assertRaises(Exception):
+        with self.assertRaises(MigrationError):
             self.core._ensure_target_customer({"login": "x"}, {"id": 0})
 
     def test_ensure_target_customer_updates_existing_customer(self) -> None:
@@ -300,7 +302,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.runner.dry_run = False
         self.runner.read_remote_file = lambda path: "invalid"
         with patch("froxlor_migrator.migration.core.froxlor_userdata_paths", return_value=["/a"]):
-            with self.assertRaises(Exception):
+            with self.assertRaises(MigrationError):
                 self.core._target_sql_root()
 
     def test_run_source_mysql_query_returns_rows_and_wraps_errors(self) -> None:

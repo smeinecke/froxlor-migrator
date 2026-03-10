@@ -27,13 +27,14 @@ class PasswordSyncTests(unittest.TestCase):
         self.assertIn("UPDATE mail_users", executed[0])
         self.assertIn("customerid=42", executed[0])
 
-    def test_sync_mail_password_hashes_fails_if_source_hash_missing(self) -> None:
+    def test_sync_mail_password_hashes_skips_missing_source_hash(self) -> None:
         migrator = object.__new__(Migrator)
         migrator._load_source_mail_password_hashes = lambda mailboxes: {}
-        migrator._exec_target_panel_sql = lambda sql: None
+        executed: list[str] = []
+        migrator._exec_target_panel_sql = lambda sql: executed.append(sql)
 
-        with self.assertRaises(MigrationError):
-            migrator._sync_mail_password_hashes(7, [{"email_full": "ops@example.test"}])
+        migrator._sync_mail_password_hashes(7, [{"email_full": "ops@example.test"}])
+        self.assertEqual([], executed)
 
     def test_sync_database_login_hashes_fails_if_source_user_missing(self) -> None:
         migrator = object.__new__(Migrator)
