@@ -17,3 +17,4 @@ __pycache__/
 /.coverage
 # mutmut mutation testing artifacts
 mutants/
+testing/.tmp/
