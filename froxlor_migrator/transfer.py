@@ -24,6 +24,12 @@ class TransferError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+def remote_sudo_prefix(config: AppConfig) -> str:
+    if config.ssh.user.strip().lower() == "root":
+        return ""
+    return f"{shlex.quote(config.commands.sudo)} "
+
+
 @dataclass
 class CommandResult:
     command: str
@@ -134,7 +140,7 @@ class TransferRunner:
 
     def _ssh_prefix(self) -> str:
         ssh = self.config.commands.ssh
-        options = []
+        options = ["-o BatchMode=yes", "-o ConnectTimeout=15"]
         if not self.config.ssh.strict_host_key_checking:
             options.append("-o StrictHostKeyChecking=no")
             options.append("-o UserKnownHostsFile=/dev/null")
@@ -168,6 +174,9 @@ class TransferRunner:
 
     def _needs_remote_sudo(self) -> bool:
         return self.config.ssh.user.strip().lower() != "root"
+
+    def remote_sudo_prefix(self) -> str:
+        return remote_sudo_prefix(self.config)
 
     def ssh_transport(self):
         transport = self._ssh.transport()
@@ -227,10 +236,11 @@ class TransferRunner:
     def transfer_files(self, source_dir: str, target_dir: str) -> None:
         local_codec, remote_codec = self._select_file_transfer_codec()
         ssh_prefix = self._ssh_prefix()
+        sudo = self.remote_sudo_prefix()
         tar = shlex.quote(self.config.commands.tar)
         src = shlex.quote(source_dir)
         remote_tar = shlex.quote(self.config.commands.tar)
-        remote_cmd = f"mkdir -p {shlex.quote(target_dir)} && {remote_codec} {remote_tar} -C {shlex.quote(target_dir)} -xpf -"
+        remote_cmd = f"{sudo}mkdir -p {shlex.quote(target_dir)} && {remote_codec}{sudo}{remote_tar} -C {shlex.quote(target_dir)} -xpf -"
         command = f"{tar} -C {src} -cvf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
         self.run(command)
 
@@ -277,8 +287,9 @@ class TransferRunner:
             raise TransferError("Mailbox transfer requires running on the source mail host; configured SSH target resolves to this local machine.")
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_prefix = self._ssh_prefix()
-        remote_sudo = f"{self.config.commands.sudo} " if self._needs_remote_sudo() else ""
-        remote = f"{ssh_prefix} {shlex.quote(remote_sudo + self.config.commands.doveadm + ' dsync-server -u ' + mailbox)}"
+        remote_sudo = self.remote_sudo_prefix()
+        remote_inner = remote_sudo + self.config.commands.doveadm + " dsync-server -u " + shlex.quote(mailbox)
+        remote = f"{ssh_prefix} {shlex.quote(remote_inner)}"
         command = f"{doveadm} backup -u {shlex.quote(mailbox)} {remote}"
         logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
         self.run(command)
@@ -289,7 +300,7 @@ class TransferRunner:
             return ""
         return self._ssh.read_file(path)
 
-    def run_remote(self, command: str, check: bool = True) -> CommandResult:
+    def run_remote(self, command: str, check: bool = True, sensitive: bool = False) -> CommandResult:
         started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run, "remote": True})
         logger.debug("Remote command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
@@ -297,7 +308,7 @@ class TransferRunner:
             finished = datetime.now(timezone.utc).isoformat()
             return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
         completed = self._ssh.run(command)
-        if completed.stdout:
+        if completed.stdout and not sensitive:
             print(completed.stdout, end="")
         if completed.stderr:
             print(completed.stderr, end="", file=sys.stderr)
@@ -307,8 +318,8 @@ class TransferRunner:
             {
                 "command": command,
                 "returncode": completed.returncode,
-                "stdout": self._truncate_output(completed.stdout or ""),
-                "stderr": self._truncate_output(completed.stderr or ""),
+                "stdout": "[redacted]" if sensitive else self._truncate_output(completed.stdout or ""),
+                "stderr": "[redacted]" if sensitive else self._truncate_output(completed.stderr or ""),
                 "remote": True,
             },
         )

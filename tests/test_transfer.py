@@ -230,6 +230,47 @@ class TransferRunnerTests(unittest.TestCase):
             self.assertIn("-p 2222", prefix)
             self.assertIn("-l deploy", prefix)
             self.assertIn("remote.example", prefix)
+            self.assertIn("BatchMode=yes", prefix)
+            self.assertIn("ConnectTimeout=15", prefix)
+
+    def test_transfer_files_uses_remote_sudo_for_non_root_user(self) -> None:
+        class CaptureRunner(TransferRunner):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.commands: list[str] = []
+
+            def run(self, command: str, check: bool = True):  # noqa: ARG002
+                self.commands.append(command)
+                return None
+
+            def _command_available(self, command: str) -> bool:  # noqa: ARG002
+                return False
+
+            def _remote_command_available(self, command: str) -> bool:  # noqa: ARG002
+                return False
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = CaptureRunner(config=_config(tmpdir, ssh_user="deploy"), dry_run=False, manifest_name="test")
+            source_dir = Path(tmpdir) / "src"
+            source_dir.mkdir()
+            (source_dir / "index.txt").write_text("hello", encoding="utf-8")
+            runner.transfer_files(str(source_dir), "/dst/site")
+            self.assertIn("sudo mkdir -p /dst/site", runner.commands[0])
+            self.assertIn("sudo tar -C /dst/site", runner.commands[0])
+
+    def test_run_remote_redacts_sensitive_output_in_manifest(self) -> None:
+        class SshStub:
+            def run(self, command: str):  # noqa: ARG002
+                return type("Result", (), {"returncode": 0, "stdout": "secret-data", "stderr": "err-data"})()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(config=_config(tmpdir), dry_run=False, manifest_name="sensitive")
+            runner._ssh = SshStub()  # type: ignore[assignment]
+            runner.run_remote("sudo cat /root/userdata.inc.php", sensitive=True)
+            events = json.loads((Path(tmpdir) / "sensitive.json").read_text(encoding="utf-8"))
+            result_events = [event for event in events if event.get("kind") == "result"]
+            self.assertEqual("[redacted]", result_events[0].get("stdout"))
+            self.assertEqual("[redacted]", result_events[0].get("stderr"))
 
     def test_ssh_target_is_local_matches_hostname(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

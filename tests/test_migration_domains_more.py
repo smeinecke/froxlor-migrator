@@ -19,6 +19,8 @@ class DummyDomainOps(MigratorDomainOps):
         self.config = SimpleNamespace(
             paths=SimpleNamespace(source_web_root="/var/www", source_transfer_root="/var/www/transfer", target_web_root="/var/www"),
             behavior=SimpleNamespace(domain_exists="skip"),
+            ssh=SimpleNamespace(user="deploy"),
+            commands=SimpleNamespace(sudo="sudo"),
         )
 
     def _domain_name(self, domain):
@@ -99,8 +101,15 @@ class MigratorDomainOpsTests(unittest.TestCase):
         ops = DummyDomainOps()
         ops.runner.dry_run = True
         ops.runner.run_remote = lambda cmd: setattr(ops, "ran", cmd)
-        ops._fix_transferred_docroot_ownership("/tmp/foo", "src", "tgt")
+        ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
         self.assertFalse(hasattr(ops, "ran"))
+
+    def test_fix_transferred_docroot_ownership_chowns_to_target_login(self) -> None:
+        ops = DummyDomainOps()
+        ops.runner.dry_run = False
+        ops.runner.run_remote = lambda cmd, check=True, sensitive=False: setattr(ops, "ran", cmd)
+        ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
+        self.assertIn("sudo chown -R tgt:tgt /tmp/foo", ops.ran)
 
     def test_ensure_domains_updates_existing_domain(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []

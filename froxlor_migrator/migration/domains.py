@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
 from ..mysql_driver import query as mysql_query
+from ..transfer import remote_sudo_prefix
 from ..util import as_int, pick, random_password
 from .types import MigrationError, ResourceRow
 
@@ -728,8 +729,9 @@ class MigratorDomainOps:
         documentroot = str(pick(source_domain, "documentroot", default="")).strip().lstrip("/")
         return f"{target_root}/{customer_login}/{documentroot}"
 
-    def _fix_transferred_docroot_ownership(self, target_docroot: str, source_login: str, target_login: str | None) -> None:
-        if not target_login or target_login == source_login or self.runner.dry_run:
+    def _fix_transferred_docroot_ownership(self, target_docroot: str, target_login: str) -> None:
+        if not target_login or self.runner.dry_run:
             return
-        chown_cmd = f"find {shlex.quote(target_docroot)} -user {shlex.quote(source_login)} -exec chown -h {shlex.quote(target_login)} {{}} +"
-        self.runner.run_remote(chown_cmd)
+        sudo = remote_sudo_prefix(self.config)
+        owner = shlex.quote(target_login)
+        self.runner.run_remote(f"{sudo}chown -R {owner}:{owner} {shlex.quote(target_docroot)}")

@@ -13,6 +13,7 @@ class DummyRunner:
         self.debug_events: list[tuple[str, dict[str, object]]] = []
         self.transferred_files: list[tuple[str, str]] = []
         self.transferred_mailboxes: list[str] = []
+        self.remote_commands: list[str] = []
 
     def debug_event(self, message: str, **payload: object) -> None:
         self.debug_events.append((message, payload))
@@ -22,6 +23,10 @@ class DummyRunner:
 
     def transfer_mailbox(self, mailbox: str) -> None:
         self.transferred_mailboxes.append(mailbox)
+
+    def run_remote(self, command: str, check: bool = True, sensitive: bool = False):  # noqa: ARG002
+        self.remote_commands.append(command)
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
 
 class DummyMigrator(Migrator):

@@ -179,7 +179,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
                 _status(f"Transferring domain data: {self._domain_name(domain)}")
                 self.runner.transfer_files(source_docroot, target_docroot)
-                self._fix_transferred_docroot_ownership(target_docroot, customer_login, target_customer_login)
+                self._fix_transferred_docroot_ownership(target_docroot, target_customer_login or customer_login)
                 _advance(f"Files transferred: {self._domain_name(domain)}")
 
         if selection.include_mail and selection.mailboxes:

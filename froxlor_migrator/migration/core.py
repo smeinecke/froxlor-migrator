@@ -27,7 +27,7 @@ from ..froxlor_mysql import (
 from ..mysql_driver import execute as mysql_execute
 from ..mysql_driver import query as mysql_query
 from ..mysql_tunnel import open_ssh_tunnel
-from ..transfer import TransferRunner
+from ..transfer import TransferRunner, remote_sudo_prefix
 from ..util import as_int, pick
 from .types import MigrationError, ResourceRow, Selection
 
@@ -312,6 +312,25 @@ class MigratorCore:
             creds = extract_sql_root_credentials(content)
             if creds:
                 found.append(creds)
+        if not found:
+            run_remote = getattr(self.runner, "run_remote", None)
+            if run_remote is not None:
+                sudo = remote_sudo_prefix(self.config)
+                for path in froxlor_userdata_paths():
+                    try:
+                        result = run_remote(f"{sudo}cat {shlex.quote(path)}", check=False, sensitive=True)
+                    except TypeError:
+                        try:
+                            result = run_remote(f"{sudo}cat {shlex.quote(path)}", check=False)
+                        except Exception:
+                            continue
+                    except Exception:
+                        continue
+                    if result.returncode != 0:
+                        continue
+                    creds = extract_sql_root_credentials(result.stdout or "")
+                    if creds:
+                        found.append(creds)
         if found:
             self._target_sql_root_credentials = max(found, key=_credential_score)
             self._debug(
@@ -444,6 +463,12 @@ class MigratorCore:
             if not self.config.ssh.strict_host_key_checking:
                 cmd.extend(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
             cmd.extend([
+                "-o",
+                "ExitOnForwardFailure=yes",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=15",
                 "-N",
                 "-L",
                 f"{local_socket}:{remote_socket}",
@@ -465,6 +490,13 @@ class MigratorCore:
                         break
                     time.sleep(0.1)
                 if not ready:
+                    if process.poll() is None:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except Exception:
+                            process.kill()
+                            process.wait()
                     stderr_text = ""
                     if process.stderr is not None:
                         stderr_text = process.stderr.read().strip()
@@ -486,8 +518,9 @@ class MigratorCore:
         try:
             self.runner.write_remote_file(remote_defaults, defaults_content, mode=0o600)
             self.runner.write_remote_file(remote_script, sql, mode=0o600)
+            sudo = remote_sudo_prefix(self.config)
             cmd = (
-                f"{shlex.quote(self.config.commands.mysql)} "
+                f"{sudo}{shlex.quote(self.config.commands.mysql)} "
                 f"--defaults-extra-file={shlex.quote(remote_defaults)} "
                 "--batch --raw --skip-column-names "
                 f"{shlex.quote(database)} < {shlex.quote(remote_script)}"
@@ -608,7 +641,7 @@ class MigratorCore:
             self.runner.write_remote_file(remote_defaults, target_defaults_content, mode=0o600)
             self.runner.upload_file(str(dump_path), remote_dump, mode=0o600)
             restore_cmd = (
-                f"{shlex.quote(self.config.commands.mysql)} "
+                f"{remote_sudo_prefix(self.config)}{shlex.quote(self.config.commands.mysql)} "
                 f"--defaults-extra-file={shlex.quote(remote_defaults)} "
                 f"{shlex.quote(target_db)} < {shlex.quote(remote_dump)}"
             )
