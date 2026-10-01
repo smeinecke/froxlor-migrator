@@ -378,22 +378,19 @@ changes.
   highest-scored rather than index 0. Needs a real `userdata.inc.php`
   fixture set before rewriting.
 
-- [ ] **Local `TransferRunner.run` has no timeout** (`transfer.py:90`) —
-  `subprocess.run` on the tar/doveadm pipes can hang forever; the SSH-side
-  timeout exists but a >1h legit transfer makes a blunt timeout risky —
-  needs a per-call timeout policy rather than reusing the remote default.
+- [x] **Local `TransferRunner.run` has no timeout** (`transfer.py:90`) —
+  fixed: `[behavior] local_command_timeout_seconds` (0 = disabled by
+  default since long transfers are legitimate) plus a per-call `timeout`
+  kwarg; expiry raises `TransferError`.
 
-- [ ] **Progress accounting drifts from `total_steps`** (`executor.py`) —
-  alias/duplicate domains are skipped without `_advance` and subdomain
-  transfers call `_advance` without being counted in `total_steps`
-  (`len(selection.subdomains)` never added). Bar under/over-shoots;
-  cosmetic.
+- [x] **Progress accounting drifts from `total_steps`** (`executor.py`) —
+  fixed: subdomain-path transfers counted in `total_steps`, and
+  alias/duplicate-docroot skips now `_advance` instead of drifting.
 
-- [ ] **`Debug`/`logger.debug` lines log raw command strings**
-  (`ssh_driver.py`, `transfer.py`) — remote-CLI commands only embed file
-  paths (SQL goes via `write_remote_file`), so exposure is limited, but
-  `--debug` output can include command args; consider a `sensitive` flag
-  on `SshDriver.run` for symmetry.
+- [x] **`Debug`/`logger.debug` lines log raw command strings**
+  (`ssh_driver.py`, `transfer.py`) — fixed: `SshDriver.run` and
+  `run_remote` accept `sensitive=True` which redacts the command in debug
+  logs, the manifest `command` event, and `check` error messages.
 
 ## Verified non-issues (round 3)
 
