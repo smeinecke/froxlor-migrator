@@ -123,7 +123,9 @@ def test_php_unescape_double_quoted() -> None:
     assert _php_unescape("a\\\\nb") == "a\\nb"
 
 
-def test_load_local_sql_root_credentials_caches_file_reads(tmp_path, monkeypatch) -> None:
+def test_load_local_sql_root_credentials_rereads_files(tmp_path, monkeypatch) -> None:
+    # Credential files are re-read on each call so rotated credentials are
+    # never served stale for the process lifetime.
     path = tmp_path / "userdata.inc.php"
     path.write_text("$sql_root[0]['user'] = 'root'; $sql_root[0]['password'] = 'p';")
 
@@ -140,5 +142,4 @@ def test_load_local_sql_root_credentials_caches_file_reads(tmp_path, monkeypatch
     creds2 = load_local_sql_root_credentials([str(path)])
 
     assert creds1 == creds2
-    # Should only read the file once due to caching.
-    assert len(read_calls) == 1
+    assert len(read_calls) == 2

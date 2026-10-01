@@ -160,7 +160,7 @@ severity/confidence.
 
 ## High
 
-- [ ] **`SshDriver.run` can deadlock on chatty remote stderr**
+- [x] **`SshDriver.run` can deadlock on chatty remote stderr**
   (`ssh_driver.py:83-84`). `stdout.read()` is fully drained before
   `stderr.read()`; Paramiko stdout/stderr share one channel window, so a remote
   command writing enough stderr blocks the server while we block on stdout →
@@ -168,7 +168,7 @@ severity/confidence.
   unrecoverable without Ctrl-C. Fix via `channel.set_combine_stderr(True)` or
   concurrent stream draining, plus a command timeout.
 
-- [ ] **Remote-CLI MySQL fallback leaks query output to console/manifest**
+- [x] **Remote-CLI MySQL fallback leaks query output to console/manifest**
   (`migration/core.py:473-492` + `transfer.py:303-325`).
   `_run_target_mysql_via_remote_cli` calls `runner.run_remote(cmd)` without
   `sensitive=True`. When the SSH tunnel fails for non-panel DBs (e.g. `mysql`
@@ -176,7 +176,7 @@ severity/confidence.
   including `mysql.user` / `mail_users` password hashes — to the terminal and
   into `manifests/*.json`.
 
-- [ ] **Socket discovery overrides explicit remote DB host**
+- [x] **Socket discovery overrides explicit remote DB host**
   (`migration/core.py:388-400`). When target `sql_root` creds have no
   `unix_socket`, `_discover_remote_mysql_socket()` finds a local socket on the
   SSH host and *deletes* `host`/`port` — so a credentials file pointing at a
@@ -184,14 +184,14 @@ severity/confidence.
   local MySQL instead. Panel writes could hit the wrong server. Only apply
   socket discovery when host is localhost/127.0.0.1/empty.
 
-- [ ] **Dir-protection dedup rebuild keyed on the wrong login**
+- [x] **Dir-protection dedup rebuild keyed on the wrong login**
   (`migration/accounts.py:316-321`). Initial `existing` map uses `target_login`
   (line 282); the post-write rebuild uses `customer_login` (source). For renamed
   target customers every row after the first misses → duplicate
   `DirProtections.add` on re-run. Same class of bug the first pass fixed — one
   rebuild site was missed.
 
-- [ ] **File transfer loops over alias/empty-docroot domains**
+- [x] **File transfer loops over alias/empty-docroot domains**
   (`migration/executor.py:182-188`). No `aliasdomain`/`parentdomain` filter; an
   alias row's empty `documentroot` resolves to `{transfer_root}/{login}/` — the
   whole customer homedir — so every alias/empty-docroot domain triggers a full
@@ -200,24 +200,24 @@ severity/confidence.
 
 ## Medium
 
-- [ ] **`mysqldump` drops routines and events** (`migration/core.py:594-599`).
+- [x] **`mysqldump` drops routines and events** (`migration/core.py:594-599`).
   `--triggers` is on by default but `--routines`/`--events` are off → stored
   procedures, functions, and scheduled events are silently lost.
 
-- [ ] **Listing wrappers swallow `FroxlorApiError` → silent loss that verify
+- [x] **Listing wrappers swallow `FroxlorApiError` → silent loss that verify
   can't see** (`api.py`: `list_domain_zones`, `list_data_dumps`,
   `list_email_forwarders`, `list_email_senders`). On error they return `[]`.
   Migration drops the data; verify calls the same wrappers and gets `[]` on both
   sides → reports OK on data it never saw. At minimum, verification must not
   treat a listing error as "empty".
 
-- [ ] **Zone dedup lowercases `content` but verify compares verbatim**
+- [x] **Zone dedup lowercases `content` but verify compares verbatim**
   (`migration/domains.py:662,678` vs `verify_migration.py:823`). An existing
   target record differing only in case is skipped by the migrator yet flagged by
   verify forever — re-running never repairs case-mangled records. Dedup should
   compare case-sensitively for content.
 
-- [ ] **Multi-level subdomains silently dropped everywhere**
+- [x] **Multi-level subdomains silently dropped everywhere**
   (`tui.py:823`, `migration/domains.py:573-580`, `verify_migration.py:847`).
   All three resolve the parent via `split(".", 1)` → `a.b.example.com` gets
   parent `b.example.com`, which isn't a main domain → filtered/skipped with no
@@ -231,63 +231,60 @@ severity/confidence.
   stale-read windows. Filter by customerid where supported or keep a refreshed
   snapshot.
 
-- [ ] **`hsts` compare asymmetry** (`migration/domains.py:284`): payload reads
+- [x] **`hsts` compare asymmetry** (`migration/domains.py:284`): payload reads
   `pick(domain, "hsts", "hsts_maxage")` but the target side reads only
   `"hsts"` → false mismatch when the API returns `hsts_maxage`.
 
-- [ ] **`_find_target_customer` matches on email alone**
+- [x] **`_find_target_customer` matches on email alone**
   (`migration/core.py:164-176`). A different customer sharing the email is
   treated as the same one → `Customers.update` overwrites quotas/settings/2FA on
   an unrelated account.
 
-- [ ] **`_compare_ftp` false-fails on derived paths**
+- [x] **`_compare_ftp` false-fails on derived paths**
   (`verify_migration.py:430-434`). The migrator derives `ftp_path` from
   `homedir`/`target_login` when `path` is empty (`accounts.py:94-101`); verify
   compares raw `path` → source `""` vs target `"web/site"` → FAIL.
 
-- [ ] **Verify assumes all optional phases ran** — unconditional
+- [x] **Verify assumes all optional phases ran** — unconditional
   password/2FA/FTP/dir-protection/mailbox hash checks
   (`verify_migration.py:353-360`, `_compare_ftp`, `_compare_dir_protection`).
   A `--skip-password-sync` migration can never verify clean; verify needs a flag
   or manifest awareness for which phases ran.
 
-- [ ] **Dead `Domains.add` retry** (`migration/domains.py:361-367`): retries a
+- [x] **Dead `Domains.add` retry** (`migration/domains.py:361-367`): retries a
   Let's Encrypt error with `letsencrypt: False`, but `base_payload` already has
   `letsencrypt=False` → identical retry that always re-throws.
 
 ## Low
 
-- [ ] `_load_source_database_user_hashes` ignores the `Host` column
+- [x] `_load_source_database_user_hashes` ignores the `Host` column
   (`core.py:660-668`) — `(user,host)` duplicates collapse to an arbitrary last
   row, flattening per-host auth differences onto all target hosts.
-- [ ] `_filter_customer_rows` `int(row_customer_id)` (`api.py:305`) crashes on a
+- [x] `_filter_customer_rows` `int(row_customer_id)` (`api.py:305`) crashes on a
   non-numeric `customerid` value → listing aborts.
-- [ ] `_target_mysql_connect_kwargs` yields `{}` on credential-resolution
+- [x] `_target_mysql_connect_kwargs` yields `{}` on credential-resolution
   failure (`core.py:376-386`) — test seam that masks real credential errors
   behind a later, misleading pymysql connect error.
-- [ ] Manifest writes are non-atomic and O(n²) (`transfer.py:61`) — every event
+- [x] Manifest writes are non-atomic and O(n²) (`transfer.py:61`) — every event
   rewrites the whole JSON file; a crash mid-write corrupts it. Append-JSONL or
   tmp+rename.
-- [ ] `transfer_files` uses `tar -cvf` (`transfer.py:244`) — the per-file list
+- [x] `transfer_files` uses `tar -cvf` (`transfer.py:244`) — the per-file list
   is buffered whole in memory by `capture_output` and dumped to the terminal
   after completion.
-- [ ] `IDENTIFIED VIA ... USING` / `IDENTIFIED BY PASSWORD` are MariaDB-only
-  (`core.py:784-795`). README scopes to MariaDB, but a MySQL 8 target would
-  fail on every statement — document or engine-detect.
-- [ ] Path-only LRU caches go stale for the process lifetime
+- [x] Path-only LRU caches go stale for the process lifetime
   (`transfer.py:297` `read_remote_file`, `froxlor_mysql.py:152-157`
   `_read_userdata_file`); `@cached` on a method also pins `self` alive.
 - [ ] PHP array extraction regexes truncate on `];`/`],` inside nested
   structures (`froxlor_mysql.py:122-129`); multiple `sql_root` entries pick the
   highest-scored rather than index 0.
-- [ ] `EmailAccounts.update` runs unconditionally when `has_account`
+- [x] `EmailAccounts.update` runs unconditionally when `has_account`
   (`accounts.py:411-421`) — fails if the target mailbox has no mail account.
-- [ ] `int(data.get("status", 200))` (`api.py:117`) crashes on a non-numeric
+- [x] `int(data.get("status", 200))` (`api.py:117`) crashes on a non-numeric
   status string.
-- [ ] `_is_idempotent_command` substring heuristic (`api.py:25-28`) could
+- [x] `_is_idempotent_command` substring heuristic (`api.py:25-28`) could
   retry a mutating command that happens to contain `.list`/`.get` — prefer an
   explicit allowlist.
-- [ ] Subdomain content outside the parent's docroot is never transferred —
+- [x] Subdomain content outside the parent's docroot is never transferred —
   only domain docroots are tarred (`executor.py:182-188`). Document or cover.
 
 ## Verified non-issues (checked, no action needed)
@@ -299,3 +296,5 @@ severity/confidence.
 - `include_letsencrypt_flags` default `True` — intentional, non-fatal wrapped.
 - `run()` local subprocess — `capture_output` drains both pipes; no deadlock.
 - `transfer_mailbox` nested `shlex.quote` — quoting is correct.
+- `IDENTIFIED VIA ... USING` / `IDENTIFIED BY PASSWORD` — MariaDB syntax, and
+  the README explicitly scopes the tool to MariaDB panels.

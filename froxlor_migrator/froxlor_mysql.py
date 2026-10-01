@@ -4,8 +4,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-from cachetools import LRUCache, cached
-
 
 def froxlor_userdata_paths() -> list[str]:
     return [
@@ -149,10 +147,6 @@ def _extract_php_array_value(body: str, key: str) -> str | None:
     return None
 
 
-_read_file_cache = LRUCache(maxsize=32)
-
-
-@cached(_read_file_cache)
 def _read_userdata_file(path: str) -> str:
     return Path(path).read_text(encoding="utf-8", errors="ignore")
 
