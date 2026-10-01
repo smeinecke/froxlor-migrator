@@ -129,14 +129,49 @@ def _credential_score(creds: dict[str, str]) -> int:
     return score
 
 
+def _php_bracket_span(text: str, open_idx: int) -> str | None:
+    """Return the content between ``text[open_idx]`` (a ``[``) and its
+    matching ``]``, tracking bracket depth and skipping PHP string literals
+    so ``]`` inside quoted values does not close the span."""
+    if open_idx >= len(text) or text[open_idx] != "[":
+        return None
+    depth = 0
+    quote = ""
+    i = open_idx
+    while i < len(text):
+        ch = text[i]
+        if quote:
+            if ch == "\\":
+                i += 2
+                continue
+            if ch == quote:
+                quote = ""
+            i += 1
+            continue
+        if ch in "'\"":
+            quote = ch
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                return text[open_idx + 1 : i]
+        i += 1
+    return None
+
+
 def _extract_php_array_body(content: str, section: str) -> str:
-    match = re.search(rf"\${re.escape(section)}\s*=\s*\[(.*?)\];", content, flags=re.DOTALL)
-    return match.group(1) if match else ""
+    match = re.search(rf"\${re.escape(section)}\s*=\s*\[", content)
+    if not match:
+        return ""
+    return _php_bracket_span(content, match.end() - 1) or ""
 
 
 def _extract_first_sql_root_entry(body: str) -> str:
-    match = re.search(r"['\"]\d+['\"]\s*=>\s*\[(.*?)\]\s*(?:,|$)", body, flags=re.DOTALL)
-    return match.group(1) if match else body
+    match = re.search(r"['\"]\d+['\"]\s*=>\s*\[", body)
+    if not match:
+        return body
+    return _php_bracket_span(body, match.end() - 1) or body
 
 
 def _extract_php_array_value(body: str, key: str) -> str | None:

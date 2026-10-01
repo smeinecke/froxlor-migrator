@@ -72,6 +72,28 @@ def test_extract_php_array_helpers() -> None:
     assert _extract_php_array_value(body, "password") == "p"
 
 
+def test_extract_php_array_body_survives_brackets_and_semicolons_in_values() -> None:
+    # The old non-greedy regex truncated the body at the first "];", which a
+    # password like "x];y" or a nested trailing array would trigger.
+    content = """
+    $sql_root = [
+        '0' => [
+            'user' => 'root',
+            'password' => 'pa];ss',
+            'host' => 'h]',
+            'extra' => ['a' => 'b];c', 'd' => 'e'],
+        ],
+        '1' => ['user' => 'other'],
+    ];
+    $sql = ['user' => 'panel'];
+    """
+    creds = extract_sql_root_credentials(content)
+    assert creds is not None
+    assert creds["user"] == "root"
+    assert creds["password"] == "pa];ss"
+    assert creds["host"] == "h]"
+
+
 def test_connect_kwargs_from_credentials_sets_defaults() -> None:
     creds = {"user": "u", "password": "p"}
     kwargs = connect_kwargs_from_credentials(creds)
