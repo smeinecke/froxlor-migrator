@@ -413,3 +413,28 @@ changes.
   start, doubled quotes, backslash runs, `-- `#`/`/* */` comments.
 - `Certificates.listing` unfiltered in verify — keyed by domain name;
   cross-customer rows can't collide since domain names are unique panel-wide.
+
+## Dead code / dedup sweep (round 3b)
+
+Fixed:
+
+- [x] `_customer_email` (`core.py`) — dead since login-only matching.
+- [x] `CommandResult.started_at`/`finished_at` — written on every command,
+  never read anywhere.
+- [x] Row-key extraction copy-pasted across `verify_migration.py`,
+  `core.py`, `accounts.py`, `tui.py` with subtly different normalization —
+  consolidated into `util.domain_name`/`mailbox_address`/`ftp_username`/
+  `ssh_key_identity`/`data_dump_key` (verify's copies also lacked
+  `.strip()` — real inconsistency, now fixed).
+- [x] `_run_target_mysql_query`/`_exec_target_mysql_sql` duplicated the
+  tunnel→remote-CLI fallback scaffold — now `_with_target_mysql(...)`.
+- [x] `_build_php_mapping_tokens`/`_build_ip_mapping_tokens` shared loop —
+  now `_build_mapping_tokens(token_getter=...)`.
+- [x] `_ensure_email_forwarders`/`_ensure_email_sender_aliases` identical
+  bodies — now `_ensure_mail_attribute_rows`.
+- [x] `domain_name` shadowed by loop locals in both `verify_migration.main()`
+  and `tui.run_app()` → `UnboundLocalError` traps; renamed to
+  `redirect_domain`/`zone_domain`.
+
+Vulture clean (remaining hits are known false positives: `daemon_threads`
+socketserver attr, `run_app` entry point).
