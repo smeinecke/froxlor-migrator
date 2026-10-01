@@ -54,6 +54,7 @@ class SshConfig:
     user: str
     port: int = 22
     strict_host_key_checking: bool = True
+    command_timeout_seconds: int = 3600
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,7 @@ def load_config(path: str | Path) -> AppConfig:
         user=_must(ssh, "user"),
         port=int(ssh.get("port", 22)),
         strict_host_key_checking=as_bool(ssh.get("strict_host_key_checking", True), default=True),
+        command_timeout_seconds=int(ssh.get("command_timeout_seconds", 3600)),
     )
     paths_cfg = PathsConfig(
         source_web_root=_must(paths, "source_web_root"),

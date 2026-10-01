@@ -161,6 +161,41 @@ class SshDriverTests(unittest.TestCase):
         self.assertEqual("hello", driver.read_file("/tmp/dummy"))
 
     @patch("froxlor_migrator.ssh_driver.paramiko.SSHClient", autospec=True)
+    def test_run_times_out_when_remote_never_exits(self, ssh_client_cls):
+        stub = SshClientStub()
+        ssh_client_cls.return_value = stub
+        driver = SshDriver(self.config)
+
+        class HangingChannel:
+            def recv_ready(self):
+                return False
+
+            def recv_stderr_ready(self):
+                return False
+
+            def exit_status_ready(self):
+                return False
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                pass
+
+        class File:
+            def __init__(self):
+                self.channel = HangingChannel()
+
+            def close(self):
+                pass
+
+        hanging = [File(), File(), File()]
+        stub.exec_command = lambda cmd: tuple(hanging)
+
+        with self.assertRaises(TimeoutError):
+            driver.run("sleep 999", timeout=0.05)
+
+    @patch("froxlor_migrator.ssh_driver.paramiko.SSHClient", autospec=True)
     def test_transport_raises_if_none(self, ssh_client_cls):
         stub = SshClientStub()
         stub._transport = None

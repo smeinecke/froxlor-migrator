@@ -77,6 +77,10 @@ class SshDriver:
         return client
 
     def run(self, command: str, timeout: float | None = None) -> SshCommandResult:
+        if timeout is None:
+            timeout = float(getattr(self.config.ssh, "command_timeout_seconds", 3600))
+        if timeout <= 0:
+            timeout = None
         client = self._connect()
         logger.debug("SSH command start: %s", command)
         stdin, stdout, _stderr = client.exec_command(command)

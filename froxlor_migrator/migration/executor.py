@@ -202,6 +202,32 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 self._fix_transferred_docroot_ownership(target_docroot, target_login)
                 _advance(f"Files transferred: {domain_name}")
 
+            if selection.include_subdomains:
+                transfer_root = self.config.paths.source_transfer_root.rstrip("/")
+                target_root = self.config.paths.target_web_root.rstrip("/")
+                for sub in selection.subdomains:
+                    sub_name = self._domain_name(sub)
+                    sub_path = str(pick(sub, "path", default="")).strip()
+                    if not sub_path:
+                        continue
+                    if sub_path.startswith("/"):
+                        # Absolute path is written verbatim to the target
+                        # record, so transfer to the same location.
+                        source_path = self._resolve_source_docroot({**sub, "documentroot": sub_path}, customer_login)
+                        target_path = sub_path
+                    else:
+                        # Relative paths live under the customer homedir.
+                        source_path = f"{transfer_root}/{customer_login}/{sub_path.lstrip('/')}"
+                        target_path = f"{target_root}/{target_login}/{sub_path.lstrip('/')}"
+                    pair = (source_path, target_path)
+                    if pair in transferred_docroots:
+                        continue
+                    transferred_docroots.add(pair)
+                    _status(f"Transferring subdomain data: {sub_name}")
+                    self.runner.transfer_files(source_path, target_path)
+                    self._fix_transferred_docroot_ownership(target_path, target_login)
+                    _advance(f"Files transferred: {sub_name}")
+
         if selection.include_mail and selection.mailboxes:
             _status("Transferring mailbox content")
             for mailbox in transferable_mailboxes:

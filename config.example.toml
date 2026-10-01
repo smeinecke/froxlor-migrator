@@ -13,6 +13,8 @@ host = "new.example.com"
 user = "root"
 port = 22
 strict_host_key_checking = true
+# Kill remote commands that exceed this many seconds (0 disables).
+command_timeout_seconds = 3600
 
 [paths]
 source_web_root = "/var/customers/webs"
