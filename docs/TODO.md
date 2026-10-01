@@ -298,3 +298,118 @@ severity/confidence.
 - `transfer_mailbox` nested `shlex.quote` — quoting is correct.
 - `IDENTIFIED VIA ... USING` / `IDENTIFIED BY PASSWORD` — MariaDB syntax, and
   the README explicitly scopes the tool to MariaDB panels.
+
+---
+
+# Third pass (2026-10)
+
+Review of TUI internals, PHP credential parsing, SSH transport draining,
+mailbox/SSH-key scoping, certificate writes, and self-review of round-2
+changes.
+
+## Fixed this pass
+
+- [x] **`resolve_subdomain_parts` blind chop** (`util.py`): a `parentdomain`
+  hint present in `known_domains` but *not* an actual suffix of the subdomain
+  name (stale/inconsistent API row) produced a garbage label via
+  `name[:-len(hint)]` — e.g. `sub.other.com` + hint `example.com` yielded
+  `("su", "example.com")`. Now requires `name.endswith("." + hint)`.
+
+- [x] **`_php_unescape` mangled `\"` in single-quoted PHP strings**
+  (`froxlor_mysql.py`): single-quoted literals only honour `\\` and `\'`;
+  unescaping `\"` corrupted credentials like `'pa\"ss'`. Double-quoted
+  semantics unchanged.
+
+- [x] **`Certificates.update` called without `id`** (`domains.py`): Froxlor's
+  update endpoint keys on the certificate id; the call only passed
+  `domainname` + cert fields. Now passes `id` from the existing target row.
+
+- [x] **`_ensure_mailboxes` stale `existing_rows`** (`accounts.py`): after
+  `Emails.add`, the row map wasn't updated — a duplicate mailbox row in the
+  selection hit `existing_rows[mailbox]` → `KeyError`. The refreshed target
+  row is now stored back, and `transferable` is deduplicated so a duplicated
+  source row can't double-trigger `doveadm`.
+
+- [x] **`mailbox_exists=skip` queued dsync for forward-only targets**
+  (`accounts.py`): a skipped target mailbox with no mail account was still
+  appended to `transferable` → `transfer_mailbox` fails on dsync. Now gated
+  on the target row's account state.
+
+- [x] **`list_email_senders` dropped per-mailbox rows lacking `email`**
+  (`api.py`): the forwarders path injects `email`/`emailaddr`/`destination`
+  into each row; the senders path did not — rows without an email key were
+  silently unselectable in the TUI and unmatched in `_ensure_email_sender_aliases`.
+  Now normalizes like forwarders and skips rows without `allowed_sender`.
+
+- [x] **TUI silently swallowed zone-listing errors** (`tui.py`):
+  `except FroxlorApiError: continue` while collecting `selected_domain_zones`
+  dropped a domain's whole zone with no trace. Now prints a warning.
+
+- [x] **SSH keys not scoped to selected FTP accounts** (`tui.py`):
+  `selected_ssh_keys = ssh_keys` ignored the FTP selection, then
+  `_ensure_ssh_keys` raised `MigrationError` for keys whose FTP user wasn't
+  migrated. Keys are now filtered via `_filter_ssh_keys_for_ftps` (mirrors
+  the forwarder/mailbox scoping).
+
+- [x] **`SshDriver.run` truncated late-arriving output** (`ssh_driver.py`):
+  the post-exit drain stopped when recv buffers were momentarily empty —
+  exit status arrives before the last data packets, so trailing
+  stdout/stderr was lost. Now drains until `eof_received`/closed
+  (deadline still enforced).
+
+- [x] **`run_remote` printed stderr verbatim under `sensitive=True`**
+  (`transfer.py`): stderr of sensitive commands (e.g. mysql error echoes
+  containing SQL fragments) reached the console; now gated like stdout.
+
+- [x] **Duplicated `_is_custom_zone_record`** — identical copies in
+  `domains.py` and `verify_migration.py` consolidated into
+  `util.is_custom_zone_record` (drift risk).
+
+## Still open / deferred
+
+- [ ] **N+1 listing refresh pattern** — `list_*` called per item across
+  accounts/domains after each write (`accounts.py`, `domains.py`,
+  `core.py:284`). O(n) full-panel API listings per migration; needs a
+  snapshot/refresh design.
+
+- [ ] **PHP array extraction regexes truncate on `];`/`],` inside nested
+  structures** (`froxlor_mysql.py` `_extract_php_array_body` /
+  `_extract_first_sql_root_entry`); multiple `sql_root` entries pick the
+  highest-scored rather than index 0. Needs a real `userdata.inc.php`
+  fixture set before rewriting.
+
+- [ ] **Local `TransferRunner.run` has no timeout** (`transfer.py:90`) —
+  `subprocess.run` on the tar/doveadm pipes can hang forever; the SSH-side
+  timeout exists but a >1h legit transfer makes a blunt timeout risky —
+  needs a per-call timeout policy rather than reusing the remote default.
+
+- [ ] **Progress accounting drifts from `total_steps`** (`executor.py`) —
+  alias/duplicate domains are skipped without `_advance` and subdomain
+  transfers call `_advance` without being counted in `total_steps`
+  (`len(selection.subdomains)` never added). Bar under/over-shoots;
+  cosmetic.
+
+- [ ] **`Debug`/`logger.debug` lines log raw command strings**
+  (`ssh_driver.py`, `transfer.py`) — remote-CLI commands only embed file
+  paths (SQL goes via `write_remote_file`), so exposure is limited, but
+  `--debug` output can include command args; consider a `sensitive` flag
+  on `SshDriver.run` for symmetry.
+
+## Verified non-issues (round 3)
+
+- `_php_unescape` indexed-`sql_root` regex ambiguity — the direct-regex
+  paths can't distinguish quote types; single-quoted semantics is the
+  correct default for `userdata.inc.php` (Froxlor emits single quotes).
+- `run_remote` command logging — SQL is transported via `write_remote_file`
+  (mode 0600), so `command` strings contain only file paths, not queries.
+- `TransferError` embedding the command — same reasoning; no secrets in
+  remote-CLI command strings.
+- `parse_multi_select("all,junk")` — `all` wins, junk ignored; harmless.
+- `open_ssh_tunnel` select loop — paramiko `Channel.fileno()` works with
+  `select`; EOF/close handled.
+- `_replace_ip_tokens` — whitespace-tokenized replacement can't corrupt
+  `ip4:`/`include:` mechanisms inside quoted TXT payloads.
+- `mysqldump`/`DELIMITER` splitter — handles `DELIMITER ` directive at line
+  start, doubled quotes, backslash runs, `-- `#`/`/* */` comments.
+- `Certificates.listing` unfiltered in verify — keyed by domain name;
+  cross-customer rows can't collide since domain names are unique panel-wide.
