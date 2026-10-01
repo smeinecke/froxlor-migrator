@@ -32,6 +32,8 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 total_steps += 1
             if selection.include_files:
                 total_steps += len(selection.domains)
+                if selection.include_subdomains:
+                    total_steps += sum(1 for sub in selection.subdomains if str(pick(sub, "path", default="")).strip())
             if selection.include_mail and selection.mailboxes:
                 total_steps += 1
 
@@ -189,12 +191,14 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                         domain=domain_name,
                         reason="alias domain shares its target domain's docroot",
                     )
+                    _advance(f"Files skipped (alias domain): {domain_name}")
                     continue
                 source_docroot = self._resolve_source_docroot(domain, customer_login)
                 target_docroot = self._resolve_target_docroot(domain, customer_login, target_login, source_docroot)
                 pair = (source_docroot, target_docroot)
                 if pair in transferred_docroots:
                     self.runner.debug_event("file_transfer_skipped", domain=domain_name, reason="docroot already transferred")
+                    _advance(f"Files skipped (duplicate docroot): {domain_name}")
                     continue
                 transferred_docroots.add(pair)
                 _status(f"Transferring domain data: {domain_name}")
@@ -221,6 +225,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                         target_path = f"{target_root}/{target_login}/{sub_path.lstrip('/')}"
                     pair = (source_path, target_path)
                     if pair in transferred_docroots:
+                        _advance(f"Files skipped (duplicate path): {sub_name}")
                         continue
                     transferred_docroots.add(pair)
                     _status(f"Transferring subdomain data: {sub_name}")

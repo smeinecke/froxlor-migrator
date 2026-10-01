@@ -85,17 +85,25 @@ class TransferRunner:
             return value
         return value[:limit] + "\n...[truncated]..."
 
-    def run(self, command: str, check: bool = True) -> CommandResult:
+    def run(self, command: str, check: bool = True, timeout: float | None = None) -> CommandResult:
         self._log_event("command", {"command": command, "dry_run": self.dry_run})
         logger.debug("Local command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
         if self.dry_run:
             return CommandResult(command=command, returncode=0)
 
-        completed = subprocess.run(
-            ["bash", "-o", "pipefail", "-c", command],
-            capture_output=True,
-            text=True,
-        )
+        if timeout is None:
+            timeout = float(getattr(self.config.behavior, "local_command_timeout_seconds", 0))
+        if timeout <= 0:
+            timeout = None
+        try:
+            completed = subprocess.run(
+                ["bash", "-o", "pipefail", "-c", command],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise TransferError(f"Local command timed out after {timeout:.0f}s: {command}") from None
         if completed.stdout:
             print(completed.stdout, end="")
         if completed.stderr:
@@ -299,11 +307,11 @@ class TransferRunner:
         return content
 
     def run_remote(self, command: str, check: bool = True, sensitive: bool = False) -> CommandResult:
-        self._log_event("command", {"command": command, "dry_run": self.dry_run, "remote": True})
-        logger.debug("Remote command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
+        self._log_event("command", {"command": "[redacted]" if sensitive else command, "dry_run": self.dry_run, "remote": True})
+        logger.debug("Remote command start: check=%s dry_run=%s command=%s", check, self.dry_run, "[redacted]" if sensitive else command)
         if self.dry_run:
             return CommandResult(command=command, returncode=0)
-        completed = self._ssh.run(command)
+        completed = self._ssh.run(command, sensitive=sensitive)
         if completed.stdout and not sensitive:
             print(completed.stdout, end="")
         if completed.stderr and not sensitive:
@@ -321,10 +329,10 @@ class TransferRunner:
         logger.debug(
             "Remote command result: returncode=%s command=%s",
             completed.returncode,
-            command,
+            "[redacted]" if sensitive else command,
         )
         if check and completed.returncode != 0:
-            raise TransferError(f"Remote command failed ({completed.returncode}): {command}")
+            raise TransferError(f"Remote command failed ({completed.returncode}): {'[redacted]' if sensitive else command}")
         return CommandResult(
             command=command,
             returncode=completed.returncode,

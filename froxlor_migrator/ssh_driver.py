@@ -76,13 +76,13 @@ class SshDriver:
         self._client = client
         return client
 
-    def run(self, command: str, timeout: float | None = None) -> SshCommandResult:
+    def run(self, command: str, timeout: float | None = None, sensitive: bool = False) -> SshCommandResult:
         if timeout is None:
             timeout = float(getattr(self.config.ssh, "command_timeout_seconds", 3600))
         if timeout <= 0:
             timeout = None
         client = self._connect()
-        logger.debug("SSH command start: %s", command)
+        logger.debug("SSH command start: %s", "[redacted]" if sensitive else command)
         stdin, stdout, _stderr = client.exec_command(command)
         stdin.close()
         channel = stdout.channel
@@ -115,7 +115,7 @@ class SshDriver:
         channel.close()
         out = b"".join(out_parts).decode("utf-8", errors="ignore")
         err = b"".join(err_parts).decode("utf-8", errors="ignore")
-        logger.debug("SSH command result: returncode=%s command=%s", code, command)
+        logger.debug("SSH command result: returncode=%s command=%s", code, "[redacted]" if sensitive else command)
         return SshCommandResult(returncode=code, stdout=out, stderr=err)
 
     def read_file(self, path: str) -> str:

@@ -260,7 +260,7 @@ class TransferRunnerTests(unittest.TestCase):
 
     def test_run_remote_redacts_sensitive_output_in_manifest(self) -> None:
         class SshStub:
-            def run(self, command: str):  # noqa: ARG002
+            def run(self, command: str, sensitive: bool = False):  # noqa: ARG002
                 return type("Result", (), {"returncode": 0, "stdout": "secret-data", "stderr": "err-data"})()
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -314,6 +314,17 @@ class TransferRunnerTests(unittest.TestCase):
         value = "x" * 10
         truncated = TransferRunner._truncate_output(value, limit=5)
         self.assertTrue(truncated.endswith("...[truncated]..."))
+
+    def test_run_times_out_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            runner = TransferRunner(
+                config=_config(tmpdir),
+                dry_run=False,
+                manifest_name="timeout",
+            )
+            runner.run("sleep 0.1")  # fast command unaffected
+            with self.assertRaises(TransferError):
+                runner.run("sleep 5", timeout=0.2)
 
 
 if __name__ == "__main__":

@@ -41,6 +41,9 @@ dry_run_default = true
 domain_exists = "fail"
 database_exists = "fail"
 mailbox_exists = "skip"
+# Abort a hung local command (tar, doveadm, mysqldump) after N seconds; 0 disables.
+# Large transfers can legitimately take a long time — set generously or leave 0.
+local_command_timeout_seconds = 0
 
 [output]
 manifest_dir = "./manifests"
