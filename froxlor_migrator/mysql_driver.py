@@ -35,108 +35,141 @@ def execute(connect_kwargs: dict[str, Any], database: str, sql: str) -> None:
                 cursor.execute(statement)
 
 
-def _iter_mysql_statements(script: str) -> list[str]:
-    delimiter = ";"
-    statements: list[str] = []
-    buffer: list[str] = []
-    in_single = False
-    in_double = False
-    in_backtick = False
-    in_line_comment = False
-    in_block_comment = False
+class _MysqlScriptScanner:
+    """Splits a MySQL script on DELIMITER-aware statement boundaries.
 
-    i = 0
-    while i < len(script):
+    The lexer tracks single/double-quoted strings, backtick identifiers,
+    line comments (``-- ``, ``#``) and block comments; statements inside any
+    of those are not split. Each state gets its own method so the per-branch
+    complexity stays readable."""
+
+    def __init__(self, script: str) -> None:
+        self.script = script
+        self.i = 0
+        self.delimiter = ";"
+        self.buffer: list[str] = []
+        self.statements: list[str] = []
+        self.in_single = False
+        self.in_double = False
+        self.in_backtick = False
+        self.in_line_comment = False
+        self.in_block_comment = False
+
+    def _pair(self) -> tuple[str, str]:
+        ch = self.script[self.i]
+        nxt = self.script[self.i + 1] if self.i + 1 < len(self.script) else ""
+        return ch, nxt
+
+    def _inside_quote(self) -> bool:
+        return self.in_single or self.in_double or self.in_backtick
+
+    def _inside_string_or_comment(self) -> bool:
+        return self._inside_quote() or self.in_line_comment or self.in_block_comment
+
+    def _consume_delimiter_directive(self) -> bool:
         # DELIMITER is only valid at the start of a line (leading whitespace allowed).
-        if (
-            script.startswith("DELIMITER ", i)
-            and script[script.rfind("\n", 0, i) + 1 : i].strip() == ""
-            and not (in_single or in_double or in_backtick or in_line_comment or in_block_comment)
-        ):
-            end = script.find("\n", i)
-            if end == -1:
-                end = len(script)
-            delimiter = script[i:end].split(" ", 1)[1].strip() or ";"
-            i = end + 1
-            continue
+        if self._inside_string_or_comment() or not self.script.startswith("DELIMITER ", self.i):
+            return False
+        line_start = self.script.rfind("\n", 0, self.i) + 1
+        if self.script[line_start : self.i].strip():
+            return False
+        end = self.script.find("\n", self.i)
+        if end == -1:
+            end = len(self.script)
+        self.delimiter = self.script[self.i : end].split(" ", 1)[1].strip() or ";"
+        self.i = end + 1
+        return True
 
-        ch = script[i]
-        nxt = script[i + 1] if i + 1 < len(script) else ""
-
-        if in_line_comment:
-            buffer.append(ch)
+    def _consume_comment_body(self) -> bool:
+        ch, nxt = self._pair()
+        if self.in_line_comment:
+            self.buffer.append(ch)
             if ch == "\n":
-                in_line_comment = False
-            i += 1
-            continue
-        if in_block_comment:
-            buffer.append(ch)
+                self.in_line_comment = False
+            self.i += 1
+            return True
+        if self.in_block_comment:
+            self.buffer.append(ch)
             if ch == "*" and nxt == "/":
-                buffer.append("/")
-                i += 2
-                in_block_comment = False
+                self.buffer.append("/")
+                self.i += 2
+                self.in_block_comment = False
             else:
-                i += 1
-            continue
+                self.i += 1
+            return True
+        return False
 
+    def _consume_doubled_quote(self) -> bool:
         # A doubled quote inside a string is a literal quote, not a boundary.
-        if in_single and ch == "'" and nxt == "'":
-            buffer.append(ch)
-            buffer.append(nxt)
-            i += 2
-            continue
-        if in_double and ch == '"' and nxt == '"':
-            buffer.append(ch)
-            buffer.append(nxt)
-            i += 2
-            continue
+        ch, nxt = self._pair()
+        if (self.in_single and ch == "'" and nxt == "'") or (self.in_double and ch == '"' and nxt == '"'):
+            self.buffer.append(ch)
+            self.buffer.append(nxt)
+            self.i += 2
+            return True
+        return False
 
-        if not (in_single or in_double or in_backtick):
-            # MySQL only treats '--' as a comment when followed by whitespace or control.
-            if ch == "-" and nxt == "-" and (i + 2 >= len(script) or script[i + 2] in " \t\r\n\v\f"):
-                in_line_comment = True
-                buffer.append(ch)
-                i += 1
-                continue
-            if ch == "#":
-                in_line_comment = True
-                buffer.append(ch)
-                i += 1
-                continue
-            if ch == "/" and nxt == "*":
-                in_block_comment = True
-                buffer.append(ch)
-                i += 1
-                continue
+    def _consume_comment_opener(self) -> bool:
+        if self._inside_quote():
+            return False
+        ch, nxt = self._pair()
+        # MySQL only treats '--' as a comment when followed by whitespace or control.
+        if ch == "-" and nxt == "-" and (self.i + 2 >= len(self.script) or self.script[self.i + 2] in " \t\r\n\v\f"):
+            self.in_line_comment = True
+        elif ch == "#":
+            self.in_line_comment = True
+        elif ch == "/" and nxt == "*":
+            self.in_block_comment = True
+        else:
+            return False
+        self.buffer.append(ch)
+        self.i += 1
+        return True
 
-        if ch == "'" and not in_double and not in_backtick or ch == '"' and not in_single and not in_backtick:
+    def _toggle_quote_state(self) -> None:
+        ch, _ = self._pair()
+        if (ch == "'" and not self.in_double and not self.in_backtick) or (ch == '"' and not self.in_single and not self.in_backtick):
             # A quote is escaped only by an odd-length run of preceding backslashes.
             backslashes = 0
-            j = i - 1
-            while j >= 0 and script[j] == "\\":
+            j = self.i - 1
+            while j >= 0 and self.script[j] == "\\":
                 backslashes += 1
                 j -= 1
             if backslashes % 2 == 0:
                 if ch == "'":
-                    in_single = not in_single
+                    self.in_single = not self.in_single
                 else:
-                    in_double = not in_double
-        elif ch == "`" and not in_single and not in_double:
-            in_backtick = not in_backtick
+                    self.in_double = not self.in_double
+        elif ch == "`" and not self.in_single and not self.in_double:
+            self.in_backtick = not self.in_backtick
 
-        if not (in_single or in_double or in_backtick or in_line_comment or in_block_comment):
-            if delimiter and script.startswith(delimiter, i):
-                statement = "".join(buffer).strip()
-                if statement:
-                    statements.append(statement)
-                buffer = []
-                i += len(delimiter)
+    def _flush_statement(self) -> bool:
+        if self._inside_string_or_comment() or not self.delimiter:
+            return False
+        if not self.script.startswith(self.delimiter, self.i):
+            return False
+        statement = "".join(self.buffer).strip()
+        if statement:
+            self.statements.append(statement)
+        self.buffer = []
+        self.i += len(self.delimiter)
+        return True
+
+    def run(self) -> list[str]:
+        while self.i < len(self.script):
+            if self._consume_delimiter_directive() or self._consume_comment_body() or self._consume_doubled_quote() or self._consume_comment_opener():
                 continue
+            self._toggle_quote_state()
+            if self._flush_statement():
+                continue
+            self.buffer.append(self.script[self.i])
+            self.i += 1
 
-        buffer.append(ch)
-        i += 1
+        tail = "".join(self.buffer).strip()
+        if tail:
+            self.statements.append(tail)
+        return self.statements
 
-    tail = "".join(buffer).strip()
-    if tail:
-        statements.append(tail)
-    return statements
+
+def _iter_mysql_statements(script: str) -> list[str]:
+    return _MysqlScriptScanner(script).run()
