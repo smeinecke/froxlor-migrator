@@ -22,6 +22,28 @@ def froxlor_userdata_paths() -> list[str]:
     ]
 
 
+def _php_unescape(value: str, double_quoted: bool = False) -> str:
+    """Unescape a PHP string literal body (without surrounding quotes).
+
+    Single-quoted PHP strings only escape ``\\`` and ``\\'``; double-quoted
+    strings additionally interpret C-style escapes. Unlike
+    ``bytes.decode("unicode_escape")`` this never mangles UTF-8 text.
+    """
+    escapes = {"\\": "\\", "'": "'", '"': '"'}
+    if double_quoted:
+        escapes.update({"n": "\n", "r": "\r", "t": "\t", "v": "\v", "f": "\f", "e": "\x1b", "$": "$"})
+    out: list[str] = []
+    i = 0
+    while i < len(value):
+        if value[i] == "\\" and i + 1 < len(value) and value[i + 1] in escapes:
+            out.append(escapes[value[i + 1]])
+            i += 2
+        else:
+            out.append(value[i])
+            i += 1
+    return "".join(out)
+
+
 def extract_sql_root_credentials(content: str) -> dict[str, str] | None:
     return _extract_credentials(content, "sql_root")
 
@@ -39,14 +61,14 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
             r"\$sql_root\s*\[\s*(\d+)\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;",
             content,
         ):
-            indexed_pairs.setdefault(index, {})[key] = raw_value
+            indexed_pairs.setdefault(index, {})[key] = _php_unescape(raw_value)
         if indexed_pairs:
             candidates = [item for item in indexed_pairs.values() if item.get("user", "").strip()]
             if candidates:
                 pairs = max(candidates, key=_credential_score)
     else:
         for key, raw_value in re.findall(r"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
-            pairs[key] = raw_value
+            pairs[key] = _php_unescape(raw_value)
 
     if not pairs:
         body = _extract_php_array_body(content, section)
@@ -62,11 +84,11 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
                     pairs[key] = value
         elif section == "sql_root":
             # Keep legacy best-effort fallback for sql_root only.
-            pairs = dict(re.findall(r"['\"]([A-Za-z0-9_]+)['\"]\s*=>\s*['\"]((?:\\.|[^'\"])*)['\"]", content))
+            pairs = {key: _php_unescape(raw_value) for key, raw_value in re.findall(r"['\"]([A-Za-z0-9_]+)['\"]\s*=>\s*['\"]((?:\\.|[^'\"])*)['\"]", content)}
 
-    user = pairs.get("user", "").encode("utf-8").decode("unicode_escape").strip()
-    password = pairs.get("password", "").encode("utf-8").decode("unicode_escape")
-    host = pairs.get("host", "").encode("utf-8").decode("unicode_escape").strip() or "localhost"
+    user = pairs.get("user", "").strip()
+    password = pairs.get("password", "")
+    host = pairs.get("host", "").strip() or "localhost"
     if not user:
         return None
 
@@ -111,11 +133,11 @@ def _extract_php_array_value(body: str, key: str) -> str | None:
     # Single-quoted scalar.
     single = re.search(rf"['\"]{re.escape(key)}['\"]\s*=>\s*'((?:\\.|[^'])*)'\s*,?", body)
     if single:
-        return single.group(1).encode("utf-8").decode("unicode_escape")
+        return _php_unescape(single.group(1))
     # Double-quoted scalar.
     double = re.search(rf"['\"]{re.escape(key)}['\"]\s*=>\s*\"((?:\\.|[^\"])*)\"\s*,?", body)
     if double:
-        return double.group(1).encode("utf-8").decode("unicode_escape")
+        return _php_unescape(double.group(1), double_quoted=True)
     # HEREDOC/NOWDOC scalar.
     heredoc = re.search(
         rf"['\"]{re.escape(key)}['\"]\s*=>\s*<<<['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?\s*\n(.*?)\n\1\s*,?",

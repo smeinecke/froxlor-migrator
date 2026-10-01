@@ -5,6 +5,8 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
+from .util import as_bool
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover - Python 3.10 fallback
@@ -134,7 +136,7 @@ def load_config(path: str | Path) -> AppConfig:
         host=_must(ssh, "host"),
         user=_must(ssh, "user"),
         port=int(ssh.get("port", 22)),
-        strict_host_key_checking=bool(ssh.get("strict_host_key_checking", True)),
+        strict_host_key_checking=as_bool(ssh.get("strict_host_key_checking", True), default=True),
     )
     paths_cfg = PathsConfig(
         source_web_root=_must(paths, "source_web_root"),
@@ -156,7 +158,7 @@ def load_config(path: str | Path) -> AppConfig:
         pigz=str(commands.get("pigz", "pigz")),
     )
     behavior_cfg = BehaviorConfig(
-        dry_run_default=bool(behavior.get("dry_run_default", True)),
+        dry_run_default=as_bool(behavior.get("dry_run_default", True), default=True),
         domain_exists=_exists_policy(behavior, "domain_exists", "fail"),
         database_exists=_exists_policy(behavior, "database_exists", "fail"),
         mailbox_exists=_exists_policy(behavior, "mailbox_exists", "skip"),

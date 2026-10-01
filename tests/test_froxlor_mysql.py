@@ -93,6 +93,36 @@ def test_load_local_credentials_prefers_non_root_and_password(tmp_path) -> None:
     assert creds2["user"] == "root"
 
 
+def test_extract_credentials_preserves_literal_backslash_n() -> None:
+    # PHP single-quoted strings do NOT interpret \n; the password keeps both chars.
+    content = "$sql['user'] = 'u'; $sql['password'] = 'ab\\ncd';"
+    creds = extract_sql_credentials(content)
+    assert creds is not None
+    assert creds["password"] == "ab\\ncd"
+
+
+def test_extract_credentials_unescapes_backslash_and_quote() -> None:
+    content = "$sql['user'] = 'u'; $sql['password'] = 'a\\\\b\\'c';"
+    creds = extract_sql_credentials(content)
+    assert creds is not None
+    assert creds["password"] == "a\\b'c"
+
+
+def test_extract_credentials_preserves_non_ascii() -> None:
+    content = "$sql['user'] = 'u'; $sql['password'] = 'pässwörd';"
+    creds = extract_sql_credentials(content)
+    assert creds is not None
+    assert creds["password"] == "pässwörd"
+
+
+def test_php_unescape_double_quoted() -> None:
+    from froxlor_migrator.froxlor_mysql import _php_unescape
+
+    assert _php_unescape("a\\nb", double_quoted=True) == "a\nb"
+    assert _php_unescape("a\\nb", double_quoted=False) == "a\\nb"
+    assert _php_unescape("a\\\\nb") == "a\\nb"
+
+
 def test_load_local_sql_root_credentials_caches_file_reads(tmp_path, monkeypatch) -> None:
     path = tmp_path / "userdata.inc.php"
     path.write_text("$sql_root[0]['user'] = 'root'; $sql_root[0]['password'] = 'p';")

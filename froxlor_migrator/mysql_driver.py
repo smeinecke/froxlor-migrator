@@ -48,7 +48,12 @@ def _iter_mysql_statements(script: str) -> list[str]:
 
     i = 0
     while i < len(script):
-        if script.startswith("DELIMITER ", i) and not (in_single or in_double or in_backtick or in_line_comment or in_block_comment):
+        # DELIMITER is only valid at the start of a line (leading whitespace allowed).
+        if (
+            script.startswith("DELIMITER ", i)
+            and script[script.rfind("\n", 0, i) + 1 : i].strip() == ""
+            and not (in_single or in_double or in_backtick or in_line_comment or in_block_comment)
+        ):
             end = script.find("\n", i)
             if end == -1:
                 end = len(script)
@@ -75,8 +80,21 @@ def _iter_mysql_statements(script: str) -> list[str]:
                 i += 1
             continue
 
+        # A doubled quote inside a string is a literal quote, not a boundary.
+        if in_single and ch == "'" and nxt == "'":
+            buffer.append(ch)
+            buffer.append(nxt)
+            i += 2
+            continue
+        if in_double and ch == '"' and nxt == '"':
+            buffer.append(ch)
+            buffer.append(nxt)
+            i += 2
+            continue
+
         if not (in_single or in_double or in_backtick):
-            if ch == "-" and nxt == "-":
+            # MySQL only treats '--' as a comment when followed by whitespace or control.
+            if ch == "-" and nxt == "-" and (i + 2 >= len(script) or script[i + 2] in " \t\r\n\v\f"):
                 in_line_comment = True
                 buffer.append(ch)
                 i += 1
@@ -92,14 +110,18 @@ def _iter_mysql_statements(script: str) -> list[str]:
                 i += 1
                 continue
 
-        if ch == "'" and not in_double and not in_backtick:
-            escaped = i > 0 and script[i - 1] == "\\"
-            if not escaped:
-                in_single = not in_single
-        elif ch == '"' and not in_single and not in_backtick:
-            escaped = i > 0 and script[i - 1] == "\\"
-            if not escaped:
-                in_double = not in_double
+        if ch == "'" and not in_double and not in_backtick or ch == '"' and not in_single and not in_backtick:
+            # A quote is escaped only by an odd-length run of preceding backslashes.
+            backslashes = 0
+            j = i - 1
+            while j >= 0 and script[j] == "\\":
+                backslashes += 1
+                j -= 1
+            if backslashes % 2 == 0:
+                if ch == "'":
+                    in_single = not in_single
+                else:
+                    in_double = not in_double
         elif ch == "`" and not in_single and not in_double:
             in_backtick = not in_backtick
 

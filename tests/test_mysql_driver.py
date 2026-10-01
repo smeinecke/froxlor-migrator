@@ -23,6 +23,38 @@ def test_iter_mysql_statements_delimiter_and_comments():
     assert any("SELECT 1" in s for s in stmts)
 
 
+def test_iter_mysql_statements_escaped_backslash_before_quote():
+    # 'C:\\' contains an escaped backslash; the following quote terminates the string.
+    sql = "INSERT INTO t VALUES ('C:\\\\path'), ('a'); INSERT INTO u VALUES (1);"
+    stmts = mysql_driver._iter_mysql_statements(sql)
+    assert stmts == ["INSERT INTO t VALUES ('C:\\\\path'), ('a')", "INSERT INTO u VALUES (1)"]
+
+
+def test_iter_mysql_statements_escaped_quote():
+    sql = "INSERT INTO t VALUES ('it\\'s'), ('b'); SELECT 1;"
+    stmts = mysql_driver._iter_mysql_statements(sql)
+    assert stmts == ["INSERT INTO t VALUES ('it\\'s'), ('b')", "SELECT 1"]
+
+
+def test_iter_mysql_statements_doubled_quote_inside_string():
+    sql = "INSERT INTO t VALUES ('a''b;c'); SELECT 2;"
+    stmts = mysql_driver._iter_mysql_statements(sql)
+    assert stmts == ["INSERT INTO t VALUES ('a''b;c')", "SELECT 2"]
+
+
+def test_iter_mysql_statements_dash_dash_requires_whitespace():
+    # 'a--b' is not a comment start in MySQL ('--' needs a following space/control).
+    sql = "SELECT a--b FROM t; SELECT 2;"
+    stmts = mysql_driver._iter_mysql_statements(sql)
+    assert stmts == ["SELECT a--b FROM t", "SELECT 2"]
+
+
+def test_iter_mysql_statements_delimiter_not_midline():
+    sql = "SELECT 'DELIMITER //' AS x; SELECT 2;"
+    stmts = mysql_driver._iter_mysql_statements(sql)
+    assert stmts == ["SELECT 'DELIMITER //' AS x", "SELECT 2"]
+
+
 def test_query_uses_connect_and_fetchall():
     cursor = MagicMock()
     cursor.fetchall.return_value = [(1, None), ("a", "b")]
