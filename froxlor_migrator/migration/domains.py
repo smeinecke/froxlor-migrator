@@ -28,6 +28,9 @@ class MigratorDomainOps:
         def _exec_target_panel_sql(self, sql: str) -> None: ...
         def _debug(self, message: str, **payload: Any) -> None: ...
         def _get_target_domain(self, domain_name: str) -> ResourceRow | None: ...
+        def _remember_target_domain(self, row: Any) -> ResourceRow | None: ...
+        def _refresh_target_domain(self, domain_name: str) -> ResourceRow | None: ...
+        def _target_domains(self) -> dict[str, ResourceRow]: ...
         def _load_source_dkim_private_key(self, domain_name: str) -> str: ...
         def _run_source_panel_query(self, sql: str) -> list[list[str]]: ...
         def _run_target_panel_query(self, sql: str) -> list[list[str]]: ...
@@ -344,7 +347,7 @@ class MigratorDomainOps:
         target_login: str | None = None,
     ) -> None:
         target_login = target_login or customer_login
-        existing_domains = {self._domain_name(item) for item in self.target.list_domains() if self._domain_name(item)}
+        existing_domains = set(self._target_domains())
         for domain in domains:
             domain_name, target_docroot, base_payload, mapped_ip_ids = self._domain_payload(
                 target_customer_id,
@@ -369,16 +372,17 @@ class MigratorDomainOps:
                 domain_id = as_int(pick(existing, "id", default=0))
             else:
                 try:
-                    self.target.call("Domains.add", {"domain": domain_name, **base_payload})
+                    # Domains.add returns the Domains.get result — a complete row.
+                    data = self.target.call("Domains.add", {"domain": domain_name, **base_payload})
                 except FroxlorApiError as exc:
                     raise MigrationError(f"Could not create domain {domain_name} on target: {exc}") from exc
                 existing_domains.add(domain_name)
-                created = self._get_target_domain(domain_name)
+                created = self._remember_target_domain(data) or self._get_target_domain(domain_name)
                 if not created:
                     raise MigrationError(f"Could not find created target domain: {domain_name}")
                 domain_id = as_int(pick(created, "id", default=0))
 
-            self.target.call(
+            updated = self.target.call(
                 "Domains.update",
                 {
                     "id": domain_id,
@@ -387,7 +391,8 @@ class MigratorDomainOps:
                 },
             )
 
-            target_domain = self._get_target_domain(domain_name)
+            # Domains.update returns a fresh Domains.get row — no extra fetch.
+            target_domain = self._remember_target_domain(updated) or self._get_target_domain(domain_name)
             if not target_domain:
                 raise MigrationError(f"Could not reload target domain after update: {domain_name}")
             self._verify_domain_settings(domain_name, target_docroot, base_payload, target_domain)
@@ -404,7 +409,8 @@ class MigratorDomainOps:
                 self._sync_dkim_keys_db(domain_name, source_dkim_public, source_dkim_private)
                 if self.runner.dry_run:
                     continue
-                target_domain = self._get_target_domain(domain_name)
+                # The DB write bypasses the API — the cached row is stale.
+                target_domain = self._refresh_target_domain(domain_name)
                 if not target_domain:
                     raise MigrationError(f"Could not reload target domain after DKIM DB sync: {domain_name}")
                 target_dkim_public = str(pick(target_domain, "dkim_pubkey", default=""))
@@ -598,7 +604,10 @@ class MigratorDomainOps:
 
             payload = {
                 "domainname": full_name,
-                "path": relative_path or raw_path,
+                # "" means the customer root itself — "/" resolves to the
+                # docroot; falling back to raw_path would nest the absolute
+                # source path under the target docroot.
+                "path": relative_path or "/",
                 "url": str(pick(row, "url", default="")),
                 "selectserveralias": as_int(pick(row, "wwwserveralias", "selectserveralias", default=0)),
                 "isemaildomain": bool(as_int(pick(row, "isemaildomain", default=0))),
@@ -620,9 +629,12 @@ class MigratorDomainOps:
             target_row = target_by_name.get(full_name)
             if target_row:
                 sub_id = as_int(pick(target_row, "id", default=0))
-                self.target.call("SubDomains.update", {"id": sub_id, **payload})
+                updated = self.target.call("SubDomains.update", {"id": sub_id, **payload})
+                # SubDomains.update returns the fresh row — merge it.
+                if isinstance(updated, dict):
+                    target_by_name[full_name] = updated
             else:
-                self.target.call(
+                added = self.target.call(
                     "SubDomains.add",
                     {
                         "subdomain": sub_part,
@@ -630,9 +642,11 @@ class MigratorDomainOps:
                         **payload,
                     },
                 )
-
-            refreshed = self.target.list_subdomains(customerid=target_customer_id)
-            target_by_name = {str(pick(item, "domain", "domainname", default="")).strip().lower(): item for item in refreshed}
+                # SubDomains.add returns SubDomains.get — merge instead of re-listing.
+                if isinstance(added, dict):
+                    target_by_name[full_name] = added
+                else:
+                    target_by_name[full_name] = {"domain": full_name}
 
     def _is_custom_zone_record(self, row: dict[str, Any], domainname: str = "") -> bool:
         return is_custom_zone_record(row, domainname)

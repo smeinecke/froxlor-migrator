@@ -282,10 +282,44 @@ class MigratorCore:
             return as_int(pick(existing, "customerid", "id", default=0))
         raise MigrationError("Failed to create target customer")
 
+    def _target_domains(self) -> dict[str, ResourceRow]:
+        """Lazy per-run {name: row} map — listing all domains once beats a
+        full list per lookup; add/update paths merge their returned row in."""
+        domain_map = getattr(self, "_target_domain_map", None)
+        if domain_map is None:
+            domain_map = {}
+            for domain in self.target.list_domains():
+                name = self._domain_name(domain)
+                if name:
+                    domain_map[name] = domain
+            self._target_domain_map = domain_map
+        return domain_map
+
     def _get_target_domain(self, domain_name: str) -> ResourceRow | None:
-        for domain in self.target.list_domains():
-            if self._domain_name(domain) == domain_name.lower():
-                return domain
+        return self._target_domains().get(domain_name.lower())
+
+    def _remember_target_domain(self, row: Any) -> ResourceRow | None:
+        """Merge an add/update/get response into the domain cache."""
+        if not isinstance(row, dict):
+            return None
+        name = self._domain_name(row)
+        if not name:
+            return None
+        if getattr(self, "_target_domain_map", None) is not None:
+            self._target_domain_map[name] = row
+        return row
+
+    def _refresh_target_domain(self, domain_name: str) -> ResourceRow | None:
+        """Single-row refetch for when stored state must be re-read (e.g.
+        after a panel-DB sync the API doesn't see through the cache)."""
+        try:
+            row = self.target.call("Domains.get", {"domainname": domain_name})
+        except FroxlorApiError:
+            row = None
+        if isinstance(row, dict):
+            return self._remember_target_domain(row) or row
+        if getattr(self, "_target_domain_map", None) is not None:
+            self._target_domain_map.pop(domain_name.lower(), None)
         return None
 
     def _source_sql_root(self) -> dict[str, str]:

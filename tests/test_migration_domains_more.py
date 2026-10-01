@@ -33,6 +33,17 @@ class DummyDomainOps(MigratorDomainOps):
     def _get_target_domain(self, domain_name: str):
         return None
 
+    def _target_domains(self):
+        list_domains = getattr(self.target, "list_domains", None)
+        rows = list_domains() if callable(list_domains) else []
+        return {name: row for row in rows if (name := self._domain_name(row))}
+
+    def _remember_target_domain(self, row):
+        return row if isinstance(row, dict) else None
+
+    def _refresh_target_domain(self, domain_name: str):
+        return self._get_target_domain(domain_name)
+
     def _run_source_panel_query(self, sql: str):
         return []
 

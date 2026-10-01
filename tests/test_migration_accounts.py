@@ -24,7 +24,7 @@ class StubTarget:
     def list_email_senders(self, customerid: int) -> list[dict[str, object]]:
         return self._email_senders
 
-    def list_emails(self) -> list[dict[str, object]]:
+    def list_emails(self, customerid: int = 0) -> list[dict[str, object]]:
         return self._emails
 
     def list_ftps(self, customerid: int) -> list[dict[str, object]]:

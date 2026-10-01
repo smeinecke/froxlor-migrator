@@ -80,19 +80,16 @@ class MigratorAccountOps:
             lambda: self.target.list_email_senders(customerid=target_customer_id),
             "allowed_sender",
             "EmailSender.add",
-            add_fallback=self._add_sender_alias_sql,
+            add_fallback=lambda email, sender: self._add_sender_alias_sql(email, sender, target_customer_id),
         )
 
-    def _add_sender_alias_sql(self, emailaddr: str, allowed_sender: str) -> None:
+    def _add_sender_alias_sql(self, emailaddr: str, allowed_sender: str, target_customer_id: int = 0) -> None:
         """Fallback for EmailSender.add, which rejects admin-API callers when the
         allowed_sender's domain is owned by a customer (validateLocalDomainOwnership
         compares CurrentUser, not the target customer). Only used when the target
         mailbox actually has a mail account — otherwise the API error was
         legitimate and is re-raised."""
-        target_row = next(
-            (row for row in self.target.list_emails() if mailbox_address(row) == emailaddr),
-            None,
-        )
+        target_row = self._reload_mailbox(target_customer_id, emailaddr)
         if target_row is None or not self._mailbox_has_account(target_row):
             raise MigrationError(f"Cannot add sender alias {allowed_sender} for {emailaddr}: target mailbox does not exist or has no mail account")
         self._exec_target_panel_sql(
@@ -133,10 +130,18 @@ class MigratorAccountOps:
             }
             existing = by_username.get(username)
             if existing:
+                existing_id = as_int(pick(existing, "id", default=0))
+                if not existing_id:
+                    # Ftps.add responses carry no id — resolve a previously
+                    # added (or stubbed) row via a single-row get.
+                    row = self.target.call("Ftps.get", {"username": username})
+                    if isinstance(row, dict):
+                        existing = by_username[username] = row
+                        existing_id = as_int(pick(existing, "id", default=0))
                 self.target.call(
                     "Ftps.update",
                     {
-                        "id": as_int(pick(existing, "id", default=0)),
+                        "id": existing_id,
                         "username": username,
                         **payload,
                     },
@@ -151,9 +156,8 @@ class MigratorAccountOps:
             }
             if "@" in username:
                 add_payload["ftp_domain"] = username.split("@", 1)[1]
-            self.target.call("Ftps.add", add_payload)
-            refreshed = self.target.list_ftps(customerid=target_customer_id)
-            by_username = {str(pick(item, "username", "ftpuser", default="")).strip().lower(): item for item in refreshed}
+            added = self.target.call("Ftps.add", add_payload)
+            by_username[username] = added if isinstance(added, dict) else {"username": username}
 
     def _ensure_ssh_keys(self, target_customer_id: int, ssh_keys: list[dict[str, Any]]) -> None:
         if not ssh_keys:
@@ -171,6 +175,11 @@ class MigratorAccountOps:
                 raise MigrationError(f"Could not map SSH key FTP user on target: {ftp_user}")
             key = (ftp_user, ssh_pubkey)
             existing_row = existing.get(key)
+            if existing_row and not as_int(pick(existing_row, "id", default=0)):
+                # Synthesized placeholder from an add whose response carried no
+                # id — re-list once to resolve the real row before updating.
+                existing = {ssh_key_identity(item): item for item in self.target.list_ssh_keys(customerid=target_customer_id)}
+                existing_row = existing.get(key)
             if existing_row:
                 existing_description = str(pick(existing_row, "description", default="")).strip()
                 if existing_description != description:
@@ -183,7 +192,7 @@ class MigratorAccountOps:
                         },
                     )
                 continue
-            self.target.call(
+            added = self.target.call(
                 "SshKeys.add",
                 {
                     "ftpuser": ftp_user,
@@ -192,8 +201,8 @@ class MigratorAccountOps:
                     "description": description,
                 },
             )
-            refreshed = self.target.list_ssh_keys(customerid=target_customer_id)
-            existing = {ssh_key_identity(item): item for item in refreshed}
+            # SshKeys.add returns {id, username} — merge instead of re-listing.
+            existing[key] = added if isinstance(added, dict) else {"id": 0, "username": ftp_user}
 
     def _ensure_data_dumps(self, target_customer_id: int, data_dumps: list[dict[str, Any]], customer_login: str = "") -> None:
         if not data_dumps:
@@ -264,6 +273,14 @@ class MigratorAccountOps:
                 "error401path": str(pick(row, "error401path", default="")),
             }
             existing = by_path.get(path.lower())
+            if existing and not as_int(pick(existing, "id", default=0)):
+                # Placeholder from an add whose response lacked the id —
+                # re-list once to resolve the real row before updating.
+                by_path = {
+                    relative_customer_path(str(pick(item, "path", default="")), target_login).lower(): item
+                    for item in self.target.list_dir_options(customerid=target_customer_id)
+                }
+                existing = by_path.get(path.lower())
             if existing:
                 self.target.call(
                     "DirOptions.update",
@@ -273,9 +290,8 @@ class MigratorAccountOps:
                     },
                 )
             else:
-                self.target.call("DirOptions.add", payload)
-            refreshed = self.target.list_dir_options(customerid=target_customer_id)
-            by_path = {relative_customer_path(str(pick(item, "path", default="")), target_login).lower(): item for item in refreshed}
+                added = self.target.call("DirOptions.add", payload)
+                by_path[path.lower()] = added if isinstance(added, dict) else {"id": 0, "path": path}
 
     def _ensure_dir_protections(
         self,
@@ -303,6 +319,17 @@ class MigratorAccountOps:
             authname = str(pick(row, "authname", default="Restricted Area")).strip() or "Restricted Area"
             key = (path.lower(), username)
             target_row = existing.get(key)
+            if target_row and not as_int(pick(target_row, "id", default=0)):
+                # Placeholder from an add whose response lacked the id —
+                # re-list once to resolve the real row before updating.
+                existing = {
+                    (
+                        relative_customer_path(str(pick(item, "path", default="")), target_login).lower(),
+                        str(pick(item, "username", default="")).strip().lower(),
+                    ): item
+                    for item in self.target.list_dir_protections(customerid=target_customer_id)
+                }
+                target_row = existing.get(key)
             payload = {
                 "customerid": target_customer_id,
                 "path": path,
@@ -322,15 +349,8 @@ class MigratorAccountOps:
                     },
                 )
             else:
-                self.target.call("DirProtections.add", payload)
-            refreshed = self.target.list_dir_protections(customerid=target_customer_id)
-            existing = {
-                (
-                    relative_customer_path(str(pick(item, "path", default="")), target_login).lower(),
-                    str(pick(item, "username", default="")).strip().lower(),
-                ): item
-                for item in refreshed
-            }
+                added = self.target.call("DirProtections.add", payload)
+                existing[key] = added if isinstance(added, dict) else {"id": 0, "path": path, "username": username}
 
     def _mailbox_payload(self, target_customer_id: int, mailbox_row: ResourceRow) -> dict[str, Any]:
         return {
@@ -357,6 +377,24 @@ class MigratorAccountOps:
         for field_name, expected, actual in rspamd_checks:
             if expected != actual:
                 raise MigrationError(f"Mailbox setting mismatch after migration for {mailbox}: {field_name} expected={expected!r} actual={actual!r}")
+
+    def _reload_mailbox(self, target_customer_id: int, mailbox: str) -> ResourceRow | None:
+        """Single-row reload via Emails.get; falls back to scanning the
+        mailbox listing when the endpoint is unavailable or returns no row."""
+        try:
+            row = self.target.call("Emails.get", {"emailaddr": mailbox})
+        except Exception:
+            row = None
+        if isinstance(row, dict):
+            address = mailbox_address(row)
+            if address == mailbox or not address:
+                # Matching address, or a get-row without an address field —
+                # either way this is the row we asked for.
+                return row
+        for item in self.target.list_emails(customerid=target_customer_id):
+            if mailbox_address(item) == mailbox:
+                return item
+        return None
 
     def _mailbox_has_account(self, mailbox_row: ResourceRow) -> bool:
         marker = pick(mailbox_row, "popaccountid", "ismailaccount", default=None)
@@ -437,13 +475,7 @@ class MigratorAccountOps:
                     },
                 )
 
-            refreshed_mailboxes = self.target.list_emails(customerid=target_customer_id)
-            target_mailbox = None
-            for row in refreshed_mailboxes:
-                candidate = str(pick(row, "email_full", "email", "emailaddr", default="")).strip().lower()
-                if candidate == mailbox:
-                    target_mailbox = row
-                    break
+            target_mailbox = self._reload_mailbox(target_customer_id, mailbox)
             if not target_mailbox:
                 raise MigrationError(f"Mailbox verification failed: could not reload {mailbox}")
             self._verify_mailbox_settings(mailbox, email_payload, target_mailbox)
