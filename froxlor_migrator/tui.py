@@ -632,7 +632,7 @@ def run_app() -> None:
         config = load_config(args.config)
     except Exception as exc:
         console.print(f"[red]Config error:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
 
     dry_run = not args.apply
     if args.apply:
@@ -659,38 +659,42 @@ def run_app() -> None:
         console.print("Debug: [green]enabled[/green]")
     if args.domain_only and args.whole_customer:
         console.print("[red]Use only one of --domain-only or --whole-customer.[/red]")
-        return
+        raise SystemExit(1)
 
     try:
         php_mapping_arg = _parse_mapping_arg(args.php_map, "--php-map")
         ip_mapping_arg = _parse_mapping_arg(args.ip_map, "--ip-map")
     except ValueError as exc:
         console.print(f"[red]Argument error:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
 
     try:
         customers = source.list_customers()
     except FroxlorApiError as exc:
         console.print(f"[red]API error while listing customers:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
 
     customer_rows = _customer_view(customers)
     selected_customer: dict[str, Any] | None = None
     if args.source_customer:
-        selected_rows = _select_rows_by_tokens(
-            customer_rows,
-            args.source_customer,
-            lambda row: [str(row.get("id", "")), str(row.get("login", "")), str(row.get("name", "")), str(row.get("email", ""))],
-            "source customer",
-        )
+        try:
+            selected_rows = _select_rows_by_tokens(
+                customer_rows,
+                args.source_customer,
+                lambda row: [str(row.get("id", "")), str(row.get("login", "")), str(row.get("name", "")), str(row.get("email", ""))],
+                "source customer",
+            )
+        except ValueError as exc:
+            console.print(f"[red]Source customer selection error:[/red] {exc}")
+            raise SystemExit(1) from exc
         if len(selected_rows) != 1:
             console.print("[red]--source-customer must resolve to exactly one customer.[/red]")
-            return
+            raise SystemExit(1)
         selected_customer = selected_rows[0]["_raw"]
     elif args.non_interactive:
         if len(customer_rows) != 1:
             console.print("[red]Non-interactive mode requires --source-customer when multiple source customers exist.[/red]")
-            return
+            raise SystemExit(1)
         selected_customer = customer_rows[0]["_raw"]
     else:
         selected_customer_row = _choose_rows(
@@ -725,7 +729,7 @@ def run_app() -> None:
         target_php_settings = target.list_php_settings()
     except FroxlorApiError as exc:
         console.print(f"[red]API discovery error:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
 
     if args.whole_customer:
         migrate_whole_customer = True
@@ -751,15 +755,19 @@ def run_app() -> None:
                     target_customer = None
                     console.print("[yellow]New customer will be created from source customer data.[/yellow]")
                 else:
-                    selected_target_rows = _select_rows_by_tokens(
-                        target_customer_rows,
-                        args.target_customer,
-                        lambda row: [str(row.get("id", "")), str(row.get("login", "")), str(row.get("name", "")), str(row.get("email", ""))],
-                        "target customer",
-                    )
+                    try:
+                        selected_target_rows = _select_rows_by_tokens(
+                            target_customer_rows,
+                            args.target_customer,
+                            lambda row: [str(row.get("id", "")), str(row.get("login", "")), str(row.get("name", "")), str(row.get("email", ""))],
+                            "target customer",
+                        )
+                    except ValueError as exc:
+                        console.print(f"[red]Target customer selection error:[/red] {exc}")
+                        raise SystemExit(1) from exc
                     if len(selected_target_rows) != 1:
                         console.print("[red]--target-customer must resolve to exactly one customer or 'new'.[/red]")
-                        return
+                        raise SystemExit(1)
                     target_customer = selected_target_rows[0]["_raw"]
                     console.print(f"[green]Using existing target customer: {pick(target_customer, 'loginname', 'login', default='unknown')}[/green]")
             elif target_customer_rows and not args.non_interactive:
@@ -780,7 +788,7 @@ def run_app() -> None:
                 console.print("[yellow]New customer will be created from source customer data.[/yellow]")
         except FroxlorApiError as exc:
             console.print(f"[red]API error while listing target customers:[/red] {exc}")
-            return
+            raise SystemExit(1) from exc
 
     if migrate_whole_customer:
         selected_domains = [d for d in domains if _domain_in_source_root(d, config.paths.source_web_root)]
@@ -796,7 +804,7 @@ def run_app() -> None:
             )
         except ValueError as exc:
             console.print(f"[red]Domain selection error:[/red] {exc}")
-            return
+            raise SystemExit(1) from exc
     else:
         if args.domains is not None:
             try:
@@ -808,7 +816,7 @@ def run_app() -> None:
                 )
             except ValueError as exc:
                 console.print(f"[red]Domain selection error:[/red] {exc}")
-                return
+                raise SystemExit(1) from exc
         elif args.non_interactive:
             selected_domains = domains
         else:
@@ -865,7 +873,7 @@ def run_app() -> None:
             )
         except ValueError as exc:
             console.print(f"[red]Selection error:[/red] {exc}")
-            return
+            raise SystemExit(1) from exc
         selected_dir_protections = dir_protections
         selected_dir_options = dir_options
         selected_ssh_keys = ssh_keys
@@ -881,7 +889,7 @@ def run_app() -> None:
                 )
             except ValueError as exc:
                 console.print(f"[red]Database selection error:[/red] {exc}")
-                return
+                raise SystemExit(1) from exc
         elif dbs and not args.non_interactive:
             selected_db_rows = _choose_rows(
                 "Customer databases (separate selection, optional - press Enter for none)",
@@ -908,7 +916,7 @@ def run_app() -> None:
                 )
             except ValueError as exc:
                 console.print(f"[red]Mailbox selection error:[/red] {exc}")
-                return
+                raise SystemExit(1) from exc
         elif args.non_interactive:
             selected_mailbox_rows = mailbox_candidates
         else:
@@ -930,7 +938,7 @@ def run_app() -> None:
                 )
             except ValueError as exc:
                 console.print(f"[red]Subdomain selection error:[/red] {exc}")
-                return
+                raise SystemExit(1) from exc
         elif not args.non_interactive:
             selected_subdomain_rows = _choose_rows(
                 "Subdomains",
@@ -950,7 +958,7 @@ def run_app() -> None:
                 )
             except ValueError as exc:
                 console.print(f"[red]FTP selection error:[/red] {exc}")
-                return
+                raise SystemExit(1) from exc
         elif ftps and not args.non_interactive:
             selected_ftp_rows = _choose_rows(
                 "FTP accounts (optional - press Enter for none)",
@@ -1005,10 +1013,10 @@ def run_app() -> None:
         )
     except ValueError as exc:
         console.print(f"[red]Mapping/selection error:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
     except FroxlorApiError as exc:
         console.print(f"[red]IP discovery/mapping error:[/red] {exc}")
-        return
+        raise SystemExit(1) from exc
 
     if args.include_files is not None:
         include_files = args.include_files == "yes"
@@ -1154,7 +1162,7 @@ def run_app() -> None:
     except (MigrationError, FroxlorApiError, TransferError) as exc:
         console.print(f"[red]Migration failed:[/red] {exc}")
         console.print(f"Manifest: {runner.manifest_path}")
-        return
+        raise SystemExit(1) from exc
 
     console.print("[green]Migration completed.[/green]")
     console.print(f"Target customer id: {context.target_customer_id}")
