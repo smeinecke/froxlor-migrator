@@ -485,3 +485,65 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
   `system.exportenabled` are now enabled in bootstrap so zone and
   data-dump paths are exercised; `seed_source.sh` resolves the built
   image via `docker compose images -q` (project-name independent).
+
+### Round 5 (post-integration review)
+
+- [x] **`listing()` trusted `count` as a global total** — several
+  endpoints (`Ftps.listing` at least) return `count` = current page
+  size, so the loop broke after the first full page and silently
+  truncated large listings. Now continues while a full page is returned
+  and stops on a short/empty one.
+
+- [x] **`domain_redirect_codes` unique key is `(rid, did)`, not `did`** —
+  `ON DUPLICATE KEY UPDATE` never fires when the redirect code changed,
+  leaving stale rows that `pexecute_first` reads arbitrarily. Sync now
+  deletes all redirect rows for migrated domains then inserts the
+  desired ones (mirrors `Domain::updateRedirectOfDomain`).
+
+- [x] **PHP credential regexes rejected the opposite quote inside
+  values** — `'pa"ss'` / `"ro'ot"` in `userdata.inc.php` failed to parse.
+  The value literal now captures the opening quote and requires the
+  matching close (named backref `(?P<q>…)(?!(?P=q))…(?P=q)`).
+
+- [x] **`SubDomains.add` resolves `path` against the target customer
+  docroot** — absolute source paths embed the source login and were
+  passed verbatim, so renamed customers got
+  `…/<target>/<source-web-root>/…`. The record payload and the
+  file-transfer destination both relativize via
+  `util.relative_customer_path` (promoted from `MigratorCore`).
+
+- [x] **Verify compared `dir_protection`/`dir_option`/`subdomain` paths
+  verbatim** — absolute paths embed the customer login; keys and
+  `_compare_dir_protection.path` now normalize through
+  `relative_customer_path`.
+
+- [x] **`Ftps.listing` has no `path` field** — `_ensure_ftp_accounts`
+  and verify's `_relative_ftp_path` now share
+  `relative_customer_path(path or homedir, login)`; root accounts use
+  `/` instead of a nested `docroot/<login>`.
+
+- [x] **`Customers.get`/`listing` strip `password`/`data_2fa` —
+  customer auth sync was a silent no-op** — `_sync_customer_password_hash`
+  and `_sync_customer_2fa_settings` now load from source
+  `panel_customers`; `type_2fa > 0` without a readable secret raises
+  `MigrationError` instead of writing a secretless flag. Verify gained
+  `_load_customer_secrets` for real password/2FA comparison.
+
+- [x] **`run_app()` returned exit 0 on every failure** — automation
+  could not detect errors; error paths now raise `SystemExit(1)` and
+  `--source-customer`/`--target-customer` selector errors are caught
+  (`ValueError` → clean exit instead of traceback).
+
+- [x] **Manifest `result` event logged raw commands even with
+  `sensitive=True`** — redaction now covers the result event's command
+  field too.
+
+### Still open / deferred
+
+- [ ] **N+1 listing refreshes** — every ensure-* re-lists target rows
+  per item; needs a snapshot/cache design pass.
+- [ ] **PHP `userdata.inc.php` nested-array regexes** — best-effort;
+  needs real fixtures before a rewrite.
+- [ ] **Local `run()` timeout** — `[behavior] local_command_timeout_seconds`
+  exists (0=disabled); tar/doveadm on huge trees may exceed an hour —
+  needs per-call policy, not a blunt global default.

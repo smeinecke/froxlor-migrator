@@ -330,14 +330,11 @@ def _compare_customer(source_row: dict[str, Any], target_row: dict[str, Any], ch
         if src != dst:
             errors.append(f"{field} source={src!r} target={dst!r}")
     if check_password:
-        source_password = str(pick(source_row, "password", default="")).strip()
-        target_password = str(pick(target_row, "password", default="")).strip()
-        if source_password and source_password != target_password:
-            errors.append("password hash mismatch")
+        # type_2fa is the only auth field the API still exposes; `password`
+        # and `data_2fa` are unset in listing/get rows and are compared via
+        # the panel databases in main().
         if as_int(pick(source_row, "type_2fa", default=0)) != as_int(pick(target_row, "type_2fa", default=0)):
             errors.append(f"type_2fa source={as_int(pick(source_row, 'type_2fa', default=0))!r} target={as_int(pick(target_row, 'type_2fa', default=0))!r}")
-        if str(pick(source_row, "data_2fa", default="")).strip() != str(pick(target_row, "data_2fa", default="")).strip():
-            errors.append("data_2fa mismatch")
     return errors
 
 
@@ -650,6 +647,30 @@ def _load_ftp_password_map(config, customer_id: int, target: bool) -> dict[str, 
     return {str(row[0]).strip().lower(): str(row[1]).strip() for row in rows if len(row) >= 2}
 
 
+def _load_customer_secrets(config, customer_id: int, target: bool) -> tuple[str, int, str] | None:
+    """(password, type_2fa, data_2fa) from panel_customers — the API strips
+    password and data_2fa from customer rows, so API fields cannot be used."""
+    sql = (
+        "SELECT password, type_2fa, data_2fa FROM panel_customers "
+        f"WHERE customerid={int(customer_id)} LIMIT 1"
+    )
+    if target:
+        rows = _run_mysql_query_target(config, sql)
+    else:
+        rows = _run_mysql_query_local(
+            connect_kwargs_from_credentials(load_local_sql_credentials(froxlor_userdata_paths())),
+            config.mysql.source_panel_database,
+            sql,
+        )
+    if not rows or not rows[0]:
+        return None
+    row = rows[0]
+    password = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+    type_2fa = as_int(row[1], default=0) if len(row) > 1 else 0
+    data_2fa = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+    return (password, type_2fa, data_2fa)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify migrated source/target parity")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
@@ -711,6 +732,22 @@ def main() -> int:
         dst_id = as_int(pick(dst_customer, "customerid", "id", default=0))
 
         customer_errs = _compare_customer(src_customer, dst_customer, check_password=not args.skip_password_sync)
+        if not args.skip_password_sync:
+            try:
+                src_secrets = _load_customer_secrets(config, src_id, target=False)
+                dst_secrets = _load_customer_secrets(config, dst_id, target=True)
+            except Exception as exc:
+                print(f"WARN customer={login}: could not query customer password/2FA state ({exc})")
+            else:
+                if src_secrets is None or dst_secrets is None:
+                    print(f"WARN customer={login}: customer row missing in {'source' if src_secrets is None else 'target'} panel DB")
+                else:
+                    if src_secrets[0] and src_secrets[0] != dst_secrets[0]:
+                        customer_errs.append("password-hash mismatch")
+                    if src_secrets[1] != dst_secrets[1]:
+                        customer_errs.append(f"type_2fa source={src_secrets[1]!r} target={dst_secrets[1]!r}")
+                    if src_secrets[2] != dst_secrets[2]:
+                        customer_errs.append("data_2fa mismatch")
         for warning in _customer_warnings(src_customer, dst_customer):
             print(f"WARN customer={login}: {warning}")
         if customer_errs:

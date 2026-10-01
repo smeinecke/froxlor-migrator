@@ -172,9 +172,8 @@ def data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
         data = {}
     destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
     loginname = str(data.get("loginname") or pick(row, "loginname", default="")).strip()
-    marker = f"/{loginname.strip('/')}/"
-    if loginname and marker in destdir:
-        destdir = destdir.split(marker, 1)[1]
+    if loginname:
+        destdir = relative_customer_path(destdir, loginname)
     return (
         destdir.strip("/"),
         as_int(data.get("dump_dbs") if "dump_dbs" in data else pick(row, "dump_dbs", default=0)),

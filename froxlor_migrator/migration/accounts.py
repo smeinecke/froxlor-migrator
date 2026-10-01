@@ -120,12 +120,10 @@ class MigratorAccountOps:
             username = str(pick(row, "username", "ftpuser", default="")).strip().lower()
             if not username:
                 continue
-            ftp_path = str(pick(row, "path", default="")).strip().strip("/")
-            if not ftp_path:
-                homedir = str(pick(row, "homedir", default="")).strip()
-                marker = f"/{customer_login.strip('/')}/"
-                if marker in homedir:
-                    ftp_path = homedir.split(marker, 1)[1].strip("/")
+            ftp_path = relative_customer_path(
+                str(pick(row, "path", default="")) or str(pick(row, "homedir", default="")),
+                customer_login,
+            )
             if not ftp_path:
                 # Ftps.listing only exposes the absolute homedir; an FTP account
                 # pointing at the customer root needs "/" (docroot), not a
@@ -216,11 +214,7 @@ class MigratorAccountOps:
                 data = {}
             destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
             loginname = str(data.get("loginname") or "").strip()
-            marker = f"/{loginname.strip('/')}/"
-            if loginname and marker in destdir:
-                path = destdir.split(marker, 1)[1].strip("/")
-            else:
-                path = destdir.strip("/")
+            path = relative_customer_path(destdir, loginname) if loginname else destdir.strip("/")
             if not path:
                 continue
             payload = {

@@ -671,16 +671,59 @@ class MigratorCore:
             out.setdefault(row[0].strip(), {})[row[1].strip()] = (row[2], row[3])
         return out
 
+    def _load_source_customer_secrets(self, source_customer: dict[str, Any]) -> tuple[str, int, str] | None:
+        """(password, type_2fa, data_2fa) from source panel_customers — the API
+        strips password and data_2fa from customer rows."""
+        login = self._customer_login(source_customer)
+        customer_id = as_int(pick(source_customer, "customerid", "id", default=0))
+        clauses = []
+        if login:
+            clauses.append(f"loginname={self._sql_utf8_literal(login)}")
+        if customer_id > 0:
+            clauses.append(f"customerid={customer_id}")
+        if not clauses:
+            return None
+        rows = self._run_source_panel_query(
+            f"SELECT password, type_2fa, data_2fa FROM panel_customers WHERE {' OR '.join(clauses)} LIMIT 1;"
+        )
+        if not rows or not rows[0]:
+            return None
+        row = rows[0]
+        password = str(row[0]).strip() if len(row) > 0 and row[0] is not None else ""
+        type_2fa = as_int(row[1], default=0) if len(row) > 1 else 0
+        data_2fa = str(row[2]).strip() if len(row) > 2 and row[2] is not None else ""
+        return (password, type_2fa, data_2fa)
+
     def _sync_customer_password_hash(self, source_customer: dict[str, Any], target_customer_id: int) -> None:
-        password_hash = str(pick(source_customer, "password", default="")).strip()
+        secrets = self._load_source_customer_secrets(source_customer)
+        if secrets is None:
+            self._debug("no panel_customers row found for source customer; skipping password hash sync")
+            return
+        password_hash = secrets[0]
         if not password_hash:
             return
         sql = f"UPDATE panel_customers SET password={self._sql_utf8_literal(password_hash)} WHERE customerid={target_customer_id};"
         self._exec_target_panel_sql(sql)
 
     def _sync_customer_2fa_settings(self, source_customer: dict[str, Any], target_customer_id: int) -> None:
-        type_2fa = as_int(pick(source_customer, "type_2fa", default=0))
-        data_2fa = str(pick(source_customer, "data_2fa", default="")).strip()
+        # type_2fa survives listing, but data_2fa is stripped — load both from
+        # the source panel DB so the secret is never silently zeroed.
+        secrets = self._load_source_customer_secrets(source_customer)
+        if secrets is not None:
+            type_2fa = secrets[1]
+            data_2fa = secrets[2]
+            if type_2fa > 0 and not data_2fa:
+                raise MigrationError("Source customer has 2FA enabled but its panel DB secret is empty; refusing to sync a secretless 2FA flag")
+        else:
+            # type_2fa>0 without its secret yields a TOTP-enabled account that
+            # can never authenticate — refuse instead of corrupting it.
+            if as_int(pick(source_customer, "type_2fa", default=0)) > 0:
+                raise MigrationError(
+                    "Source customer has 2FA enabled but the panel DB row could not be read; refusing to sync a secretless 2FA flag"
+                )
+            self._debug("no panel_customers row found for source customer; falling back to API fields for 2FA")
+            type_2fa = as_int(pick(source_customer, "type_2fa", default=0))
+            data_2fa = str(pick(source_customer, "data_2fa", default="")).strip()
         sql = f"UPDATE panel_customers SET type_2fa={type_2fa}, data_2fa={self._sql_utf8_literal(data_2fa)} WHERE customerid={target_customer_id};"
         self._exec_target_panel_sql(sql)
 

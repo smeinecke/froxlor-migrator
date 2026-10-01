@@ -319,7 +319,7 @@ class TransferRunner:
         self._log_event(
             "result",
             {
-                "command": command,
+                "command": "[redacted]" if sensitive else command,
                 "returncode": completed.returncode,
                 "stdout": "[redacted]" if sensitive else self._truncate_output(completed.stdout or ""),
                 "stderr": "[redacted]" if sensitive else self._truncate_output(completed.stderr or ""),

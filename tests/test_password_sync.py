@@ -48,8 +48,11 @@ class PasswordSyncTests(unittest.TestCase):
         migrator = object.__new__(Migrator)
         executed: list[str] = []
         migrator._exec_target_panel_sql = lambda sql: executed.append(sql)
+        # data_2fa is stripped from API rows — the secret comes from the
+        # source panel DB (password, type_2fa, data_2fa).
+        migrator._run_source_panel_query = lambda sql: [["hash", "1", "seed2fa"]]
 
-        migrator._sync_customer_2fa_settings({"type_2fa": 1, "data_2fa": "seed2fa"}, 11)
+        migrator._sync_customer_2fa_settings({"loginname": "cust", "type_2fa": 1}, 11)
 
         self.assertEqual(1, len(executed))
         self.assertIn("UPDATE panel_customers", executed[0])

@@ -404,8 +404,23 @@ class MigratorCoreMoreTests(unittest.TestCase):
     def test_sync_customer_password_hash_updates_panel_customers(self) -> None:
         executed: list[str] = []
         self.core._exec_target_panel_sql = lambda sql: executed.append(sql)
-        self.core._sync_customer_password_hash({"password": "hash"}, 5)
+        # Customers.get/listing strip `password` — the hash comes from the
+        # source panel DB, not the API row.
+        self.core._run_source_panel_query = lambda sql: [["hash", "0", ""]]
+        self.core._sync_customer_password_hash({"loginname": "cust", "password": ""}, 5)
         self.assertTrue(executed[0].startswith("UPDATE panel_customers"))
+        # _sql_utf8_literal hex-encodes: 'hash' -> 0x68617368
+        self.assertIn("0x68617368", executed[0])
+
+    def test_sync_customer_2fa_refuses_secretless_enabled_flag(self) -> None:
+        self.core._run_source_panel_query = lambda sql: []
+        with self.assertRaises(MigrationError):
+            self.core._sync_customer_2fa_settings({"loginname": "cust", "type_2fa": 1}, 5)
+
+    def test_sync_customer_2fa_refuses_empty_secret(self) -> None:
+        self.core._run_source_panel_query = lambda sql: [["hash", "2", ""]]
+        with self.assertRaises(MigrationError):
+            self.core._sync_customer_2fa_settings({"loginname": "cust"}, 5)
 
     def test_preflight_runs_commands_based_on_selection(self) -> None:
         called: list[str] = []
