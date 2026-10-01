@@ -125,6 +125,29 @@ def is_custom_zone_record(row: dict[str, Any], domainname: str = "") -> bool:
     return True
 
 
+def relative_customer_path(path: str, customer_login: str) -> str:
+    """Strip the ``/<login>/`` component from a customer-owned path.
+
+    Handles both absolute paths (``/var/customers/webs/<login>/dir``) and
+    already-relative ones (``<login>/dir`` or ``dir``). Returns ``""`` for
+    empty/root paths. Only the first ``/<login>/`` marker is stripped so a
+    nested directory that happens to equal the login is preserved.
+    """
+    cleaned = path.strip().strip("/")
+    if not cleaned:
+        return ""
+    login = customer_login.strip("/")
+    if not login:
+        return cleaned
+    marker = f"/{login}/"
+    idx = f"/{cleaned.lower()}/".find(marker.lower())
+    if idx >= 0:
+        return cleaned[idx + len(marker) - 1 :].strip("/")
+    if cleaned.lower().startswith(login.lower() + "/"):
+        cleaned = cleaned[len(login) + 1 :]
+    return cleaned
+
+
 def domain_name(row: dict[str, Any]) -> str:
     return str(pick(row, "domain", "domainname", default="")).strip().lower()
 

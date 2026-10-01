@@ -33,8 +33,13 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         self.assertEqual("example.com", domain_name({"domain": "Example.com"}))
         self.assertEqual("a@b", mailbox_address({"email": "A@B"}))
         self.assertEqual("a@b", domain_name({"domain": "A@B"}))
-        self.assertEqual(("/path", "user"), _dir_protection_name({"path": "/Path", "username": "User"}))
-        self.assertEqual("/path", _dir_option_name({"path": "/Path"}))
+        self.assertEqual(("path", "user"), _dir_protection_name({"path": "/Path", "username": "User"}))
+        self.assertEqual("path", _dir_option_name({"path": "/Path"}))
+        # Customer-login components are stripped for cross-host comparison.
+        self.assertEqual(
+            ("web/protected", "user"),
+            _dir_protection_name({"path": "/var/customers/webs/cust/web/protected", "username": "User"}, "cust"),
+        )
         self.assertEqual(("user", "key"), ssh_key_identity({"username": "User", "ssh_pubkey": "key"}))
         self.assertEqual(("tmp", 1, 2, 3, "k"), data_dump_key({"path": "/tmp", "dump_dbs": 1, "dump_mail": 2, "dump_web": 3, "pgp_public_key": "k"}))
         # DataDump.listing rows nest the job config under `data`; absolute

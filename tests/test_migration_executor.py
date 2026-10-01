@@ -199,25 +199,30 @@ class MigratorExecuteTests(unittest.TestCase):
             reasons,
         )
 
-    def test_execute_transfers_absolute_subdomain_paths_verbatim(self) -> None:
+    def test_execute_maps_subdomain_paths_into_target_docroot(self) -> None:
         migrator = DummyMigrator()
         migrator.runner.dry_run = False
 
         selection = self._selection_with_domains([{"domain": "example.com", "documentroot": "/var/www/foo/web"}])
         selection.include_subdomains = True
         selection.subdomains = [
-            {"domain": "a.example.com", "path": "/srv/special"},
+            # Absolute path inside the customer homedir is relativized.
+            {"domain": "a.example.com", "path": "/var/www/foo/special"},
+            # Absolute path outside the customer homedir is mapped under the
+            # target documentroot (Froxlor resolves relative paths the same way).
+            {"domain": "b.example.com", "path": "/srv/special"},
             # Relative path under the customer homedir.
-            {"domain": "b.example.com", "path": "extra/dir"},
+            {"domain": "c.example.com", "path": "extra/dir"},
             # Empty path: nothing to transfer.
-            {"domain": "c.example.com", "path": ""},
+            {"domain": "d.example.com", "path": ""},
         ]
         migrator.execute(selection)
 
         self.assertEqual(
             [
                 ("/var/www/transfer/foo/web", "/var/www/foo/web"),
-                ("/srv/special", "/srv/special"),
+                ("/var/www/transfer/foo/special", "/var/www/foo/special"),
+                ("/srv/special", "/var/www/foo/srv/special"),
                 ("/var/www/transfer/foo/extra/dir", "/var/www/foo/extra/dir"),
             ],
             migrator.runner.transferred_files,

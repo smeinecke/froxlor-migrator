@@ -6,6 +6,7 @@ from pathlib import Path
 
 from froxlor_migrator.config import load_config
 from froxlor_migrator.migration.core import MigratorCore
+from froxlor_migrator.util import relative_customer_path
 
 
 class StubRunner:
@@ -81,9 +82,9 @@ class MigratorCoreTests(unittest.TestCase):
         self.assertIn("/tmp/mysql.sock", sockets)
 
     def test_relative_customer_path_strips_login_prefixes(self) -> None:
-        self.assertEqual("sub/path", self.core._relative_customer_path("/user/sub/path", "user"))
-        self.assertEqual("sub/path", self.core._relative_customer_path("user/sub/path", "user"))
-        self.assertEqual("", self.core._relative_customer_path("/", "user"))
+        self.assertEqual("sub/path", relative_customer_path("/user/sub/path", "user"))
+        self.assertEqual("sub/path", relative_customer_path("user/sub/path", "user"))
+        self.assertEqual("", relative_customer_path("/", "user"))
 
     def test_coerce_id_list_handles_various_inputs(self) -> None:
         self.assertEqual([1, 2], self.core._coerce_id_list(["1", "2"], [99]))

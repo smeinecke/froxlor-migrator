@@ -27,20 +27,21 @@ from .util import (
     is_custom_zone_record,
     mailbox_address,
     pick,
+    relative_customer_path,
     resolve_subdomain_parts,
     ssh_key_identity,
 )
 
 
-def _dir_protection_name(row: dict[str, Any]) -> tuple[str, str]:
+def _dir_protection_name(row: dict[str, Any], customer_login: str = "") -> tuple[str, str]:
     return (
-        str(pick(row, "path", default="")).strip().lower(),
+        relative_customer_path(str(pick(row, "path", default="")), customer_login).lower(),
         str(pick(row, "username", default="")).strip().lower(),
     )
 
 
-def _dir_option_name(row: dict[str, Any]) -> str:
-    return str(pick(row, "path", default="")).strip().lower()
+def _dir_option_name(row: dict[str, Any], customer_login: str = "") -> str:
+    return relative_customer_path(str(pick(row, "path", default="")), customer_login).lower()
 
 
 def _docroot_in_any_root(docroot: str, roots: list[str]) -> bool:
@@ -461,13 +462,18 @@ def _compare_ftp(
     return errors
 
 
-def _compare_dir_protection(source_row: dict[str, Any], target_row: dict[str, Any], check_password: bool = True) -> list[str]:
+def _compare_dir_protection(
+    source_row: dict[str, Any],
+    target_row: dict[str, Any],
+    check_password: bool = True,
+    customer_login: str = "",
+) -> list[str]:
     errors: list[str] = []
     checks = [
         (
             "path",
-            str(pick(source_row, "path", default="")),
-            str(pick(target_row, "path", default="")),
+            relative_customer_path(str(pick(source_row, "path", default="")), customer_login),
+            relative_customer_path(str(pick(target_row, "path", default="")), customer_login),
         ),
         (
             "username",
@@ -629,6 +635,21 @@ def _load_redirect_map_target(config, customer_id: int) -> dict[str, tuple[str, 
     return result
 
 
+def _load_ftp_password_map(config, customer_id: int, target: bool) -> dict[str, str]:
+    # Ftps.listing strips `password`, so the API compare is vacuous — the hash
+    # only exists in panel DB `ftp_users`.
+    sql = f"SELECT username, password FROM ftp_users WHERE customerid={int(customer_id)}"
+    if target:
+        rows = _run_mysql_query_target(config, sql)
+    else:
+        rows = _run_mysql_query_local(
+            connect_kwargs_from_credentials(load_local_sql_credentials(froxlor_userdata_paths())),
+            config.mysql.source_panel_database,
+            sql,
+        )
+    return {str(row[0]).strip().lower(): str(row[1]).strip() for row in rows if len(row) >= 2}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Verify migrated source/target parity")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
@@ -714,13 +735,25 @@ def main() -> int:
             src_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in source.list_ftps(customerid=src_id, loginname=login)}
             dst_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in target.list_ftps(customerid=dst_id, loginname=login)}
             src_dir_protections = (
-                {} if args.skip_dir_protections else {_dir_protection_name(x): x for x in source.list_dir_protections(customerid=src_id, loginname=login)}
+                {}
+                if args.skip_dir_protections
+                else {_dir_protection_name(x, login): x for x in source.list_dir_protections(customerid=src_id, loginname=login)}
             )
             dst_dir_protections = (
-                {} if args.skip_dir_protections else {_dir_protection_name(x): x for x in target.list_dir_protections(customerid=dst_id, loginname=login)}
+                {}
+                if args.skip_dir_protections
+                else {_dir_protection_name(x, login): x for x in target.list_dir_protections(customerid=dst_id, loginname=login)}
             )
-            src_dir_options = {} if args.skip_dir_options else {_dir_option_name(x): x for x in source.list_dir_options(customerid=src_id, loginname=login)}
-            dst_dir_options = {} if args.skip_dir_options else {_dir_option_name(x): x for x in target.list_dir_options(customerid=dst_id, loginname=login)}
+            src_dir_options = (
+                {}
+                if args.skip_dir_options
+                else {_dir_option_name(x, login): x for x in source.list_dir_options(customerid=src_id, loginname=login)}
+            )
+            dst_dir_options = (
+                {}
+                if args.skip_dir_options
+                else {_dir_option_name(x, login): x for x in target.list_dir_options(customerid=dst_id, loginname=login)}
+            )
             src_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in source.list_ssh_keys(customerid=src_id, loginname=login)}
             dst_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in target.list_ssh_keys(customerid=dst_id, loginname=login)}
 
@@ -800,6 +833,15 @@ def main() -> int:
                 customer_failed = True
                 src_redirects = {}
                 dst_redirects = {}
+
+        src_ftp_hashes: dict[str, str] = {}
+        dst_ftp_hashes: dict[str, str] = {}
+        if not args.skip_ftp and not args.skip_password_sync:
+            try:
+                src_ftp_hashes = _load_ftp_password_map(config, src_id, target=False)
+                dst_ftp_hashes = _load_ftp_password_map(config, dst_id, target=True)
+            except Exception as exc:
+                print(f"WARN customer={login}: could not query FTP password hashes ({exc})")
 
         for domain in sorted(src_domains):
             source_docroot = str(pick(src_domains[domain], "documentroot", default=""))
@@ -922,6 +964,13 @@ def main() -> int:
                 target_login=login,
                 check_password=not args.skip_password_sync,
             )
+            if not args.skip_password_sync and src_ftp_hashes:
+                src_hash = src_ftp_hashes.get(ftp_user)
+                dst_hash = dst_ftp_hashes.get(ftp_user)
+                if src_hash and dst_hash is not None and src_hash != dst_hash:
+                    errs.append("password-hash mismatch")
+                elif src_hash and dst_hash is None:
+                    errs.append("password hash missing on target")
             if errs:
                 print(f"FAIL customer={login} ftp={ftp_user}: {'; '.join(errs)}")
                 failures += 1
@@ -933,7 +982,7 @@ def main() -> int:
                 failures += 1
                 customer_failed = True
                 continue
-            errs = _compare_dir_protection(src_dir_protections[key], dst_dir_protections[key], check_password=not args.skip_password_sync)
+            errs = _compare_dir_protection(src_dir_protections[key], dst_dir_protections[key], check_password=not args.skip_password_sync, customer_login=login)
             if errs:
                 print(f"FAIL customer={login} dir-protection={key[0]}:{key[1]}: {'; '.join(errs)}")
                 failures += 1

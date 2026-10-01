@@ -25,7 +25,7 @@ from ..mysql_driver import execute as mysql_execute
 from ..mysql_driver import query as mysql_query
 from ..mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from ..transfer import TransferRunner, remote_sudo_prefix
-from ..util import as_int, domain_name, mailbox_address, pick
+from ..util import as_int, domain_name, mailbox_address, pick, relative_customer_path
 from .types import MigrationError, ResourceRow, Selection
 
 T = TypeVar("T")
@@ -68,20 +68,6 @@ class MigratorCore:
                 return candidate
         return ""
 
-    def _relative_customer_path(self, path: str, customer_login: str) -> str:
-        cleaned = path.strip().strip("/")
-        if not cleaned:
-            return ""
-        login = customer_login.strip("/")
-        marker = f"/{login}/"
-        idx = f"/{cleaned.lower()}/".find(marker.lower())
-        if idx >= 0:
-            # Keep everything after the first /<login>/ component only; a nested
-            # directory that happens to equal the login must be preserved.
-            return cleaned[idx + len(marker) - 1 :].strip("/")
-        if cleaned.lower().startswith(login.lower() + "/"):
-            cleaned = cleaned[len(login) + 1 :]
-        return cleaned
 
     def __init__(
         self,
@@ -768,14 +754,14 @@ class MigratorCore:
         target_rows = self.target.list_dir_protections(customerid=target_customer_id)
         target_by_key = {
             (
-                self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
+                relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
                 str(pick(row, "username", default="")).strip().lower(),
             ): str(pick(row, "path", default="")).strip()
             for row in target_rows
         }
         statements: list[str] = []
         for row in dir_protections:
-            path = self._relative_customer_path(str(pick(row, "path", default="")), customer_login)
+            path = relative_customer_path(str(pick(row, "path", default="")), customer_login)
             username = str(pick(row, "username", default="")).strip().lower()
             password_hash = str(pick(row, "password", default="")).strip()
             if not path or not username or not password_hash:

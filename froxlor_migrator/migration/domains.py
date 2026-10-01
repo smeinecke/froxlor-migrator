@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
 from ..transfer import remote_sudo_prefix
-from ..util import as_int, is_custom_zone_record, pick, random_password, resolve_subdomain_parts
+from ..util import as_int, is_custom_zone_record, pick, random_password, relative_customer_path, resolve_subdomain_parts
 from .types import MigrationError, ResourceRow
 
 
@@ -67,6 +67,18 @@ class MigratorDomainOps:
         if not redirects:
             return
         statements: list[str] = []
+        domain_names = sorted({
+            str(pick(row, "domain", "domainname", default="")).lower() for row in domains if str(pick(row, "domain", "domainname", default=""))
+        })
+        if domain_names:
+            # domain_redirect_codes is UNIQUE on (rid, did) — a changed code
+            # does not conflict, so ON DUPLICATE KEY accumulates stale rows.
+            # Froxlor's own updateRedirectOfDomain deletes then re-inserts.
+            name_list = ", ".join(self._sql_utf8_literal(name) for name in domain_names)
+            statements.append(
+                "DELETE FROM domain_redirect_codes WHERE did IN "
+                f"(SELECT id FROM panel_domains WHERE domain IN ({name_list}));"
+            )
         for domain_name, alias_name, redirect_code in redirects:
             statements.append(
                 "UPDATE panel_domains d "
@@ -78,8 +90,7 @@ class MigratorDomainOps:
                 "INSERT INTO domain_redirect_codes (did, rid) "
                 "SELECT d.id, "
                 f"{redirect_code} FROM panel_domains d "
-                f"WHERE d.domain={self._sql_utf8_literal(domain_name)} "
-                "ON DUPLICATE KEY UPDATE rid=VALUES(rid);"
+                f"WHERE d.domain={self._sql_utf8_literal(domain_name)};"
             )
         self._exec_target_panel_sql(" ".join(statements))
 
@@ -555,6 +566,8 @@ class MigratorDomainOps:
         target_customer_id: int,
         subdomains: list[dict[str, Any]],
         php_setting_map: dict[int, int],
+        customer_login: str = "",
+        target_login: str = "",
     ) -> None:
         if not subdomains:
             return
@@ -580,9 +593,15 @@ class MigratorDomainOps:
             source_php_setting = as_int(pick(row, "phpsettingid", default=0))
             mapped_php_setting = php_setting_map.get(source_php_setting, 0)
 
+            # Froxlor resolves the path against the *target* customer's
+            # documentroot; an absolute source path embeds the source login and
+            # must be relativized first (identical semantics to dir-protections).
+            raw_path = str(pick(row, "path", default="")).strip()
+            relative_path = relative_customer_path(raw_path, customer_login)
+
             payload = {
                 "domainname": full_name,
-                "path": str(pick(row, "path", default="")),
+                "path": relative_path or raw_path,
                 "url": str(pick(row, "url", default="")),
                 "selectserveralias": as_int(pick(row, "wwwserveralias", "selectserveralias", default=0)),
                 "isemaildomain": bool(as_int(pick(row, "isemaildomain", default=0))),

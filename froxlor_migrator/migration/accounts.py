@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
-from ..util import as_bool, as_int, data_dump_key, ftp_username, mailbox_address, pick, random_password, ssh_key_identity
+from ..util import as_bool, as_int, data_dump_key, ftp_username, mailbox_address, pick, random_password, relative_customer_path, ssh_key_identity
 from .types import MigrationError, ResourceRow
 
 
@@ -17,7 +17,6 @@ class MigratorAccountOps:
         target: FroxlorClient
 
         def _mailbox_address(self, mailbox: ResourceRow) -> str: ...
-        def _relative_customer_path(self, path: str, customer_login: str) -> str: ...
         def _debug(self, message: str, **payload: Any) -> None: ...
         def _exec_target_panel_sql(self, sql: str) -> None: ...
         def _sql_utf8_literal(self, value: str) -> str: ...
@@ -255,9 +254,9 @@ class MigratorAccountOps:
             return
         target_login = target_login or customer_login
         target_rows = self.target.list_dir_options(customerid=target_customer_id)
-        by_path = {self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(): row for row in target_rows}
+        by_path = {relative_customer_path(str(pick(row, "path", default="")), target_login).lower(): row for row in target_rows}
         for row in dir_options:
-            path = self._relative_customer_path(str(pick(row, "path", default="")), customer_login)
+            path = relative_customer_path(str(pick(row, "path", default="")), customer_login)
             if not path:
                 continue
             payload = {
@@ -282,7 +281,7 @@ class MigratorAccountOps:
             else:
                 self.target.call("DirOptions.add", payload)
             refreshed = self.target.list_dir_options(customerid=target_customer_id)
-            by_path = {self._relative_customer_path(str(pick(item, "path", default="")), target_login).lower(): item for item in refreshed}
+            by_path = {relative_customer_path(str(pick(item, "path", default="")), target_login).lower(): item for item in refreshed}
 
     def _ensure_dir_protections(
         self,
@@ -297,13 +296,13 @@ class MigratorAccountOps:
         target_rows = self.target.list_dir_protections(customerid=target_customer_id)
         existing = {
             (
-                self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
+                relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
                 str(pick(row, "username", default="")).strip().lower(),
             ): row
             for row in target_rows
         }
         for row in dir_protections:
-            path = self._relative_customer_path(str(pick(row, "path", default="")), customer_login)
+            path = relative_customer_path(str(pick(row, "path", default="")), customer_login)
             username = str(pick(row, "username", default="")).strip().lower()
             if not path or not username:
                 continue
@@ -333,7 +332,7 @@ class MigratorAccountOps:
             refreshed = self.target.list_dir_protections(customerid=target_customer_id)
             existing = {
                 (
-                    self._relative_customer_path(str(pick(item, "path", default="")), target_login).lower(),
+                    relative_customer_path(str(pick(item, "path", default="")), target_login).lower(),
                     str(pick(item, "username", default="")).strip().lower(),
                 ): item
                 for item in refreshed

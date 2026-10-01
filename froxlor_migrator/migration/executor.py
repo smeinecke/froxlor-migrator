@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..util import as_int, pick
+from ..util import as_int, pick, relative_customer_path
 from .accounts import MigratorAccountOps
 from .core import MigratorCore
 from .domains import MigratorDomainOps
@@ -84,7 +84,13 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         _advance("Domain redirects synchronized")
         if selection.include_subdomains:
             _status("Synchronizing subdomains")
-            self._ensure_subdomains(target_customer_id, selection.subdomains, selection.php_setting_map)
+            self._ensure_subdomains(
+                target_customer_id,
+                selection.subdomains,
+                selection.php_setting_map,
+                customer_login,
+                target_login,
+            )
             _advance("Subdomains synchronized")
         if selection.include_certificates:
             _status("Synchronizing certificates")
@@ -207,22 +213,18 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 _advance(f"Files transferred: {domain_name}")
 
             if selection.include_subdomains:
-                transfer_root = self.config.paths.source_transfer_root.rstrip("/")
                 target_root = self.config.paths.target_web_root.rstrip("/")
                 for sub in selection.subdomains:
                     sub_name = self._domain_name(sub)
                     sub_path = str(pick(sub, "path", default="")).strip()
                     if not sub_path:
                         continue
-                    if sub_path.startswith("/"):
-                        # Absolute path is written verbatim to the target
-                        # record, so transfer to the same location.
-                        source_path = self._resolve_source_docroot({**sub, "documentroot": sub_path}, customer_login)
-                        target_path = sub_path
-                    else:
-                        # Relative paths live under the customer homedir.
-                        source_path = f"{transfer_root}/{customer_login}/{sub_path.lstrip('/')}"
-                        target_path = f"{target_root}/{target_login}/{sub_path.lstrip('/')}"
+                    relative_sub_path = relative_customer_path(sub_path, customer_login) or sub_path.lstrip("/")
+                    source_path = self._resolve_source_docroot({**sub, "documentroot": sub_path}, customer_login)
+                    # The target record always stores the path relative to the
+                    # target customer's documentroot, so transfer under the
+                    # target login regardless of how the source stored it.
+                    target_path = f"{target_root}/{target_login}/{relative_sub_path}"
                     pair = (source_path, target_path)
                     if pair in transferred_docroots:
                         _advance(f"Files skipped (duplicate path): {sub_name}")
