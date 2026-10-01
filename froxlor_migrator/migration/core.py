@@ -640,7 +640,7 @@ class MigratorCore:
                 "--single-transaction --quick --skip-lock-tables --routines --events "
                 f"{shlex.quote(source_db)} > {shlex.quote(str(dump_path))}"
             )
-            self.runner.run(dump_cmd)
+            self.runner.run(dump_cmd, timeout=float(getattr(self.config.behavior, "transfer_timeout_seconds", 0)) or None)
             self.runner.write_remote_file(remote_defaults, target_defaults_content, mode=0o600)
             self.runner.upload_file(str(dump_path), remote_dump, mode=0o600)
             restore_cmd = (

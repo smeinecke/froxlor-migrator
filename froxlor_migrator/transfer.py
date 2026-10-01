@@ -190,7 +190,7 @@ class TransferRunner:
     @staticmethod
     def _command_available(command: str) -> bool:
         try:
-            result = subprocess.run(["bash", "-c", f"command -v {shlex.quote(command)}"], capture_output=True, text=True)
+            result = subprocess.run(["bash", "-c", f"command -v {shlex.quote(command)}"], capture_output=True, text=True, timeout=30)
             return result.returncode == 0
         except Exception:
             return False
@@ -198,7 +198,7 @@ class TransferRunner:
     def _remote_command_available(self, command: str) -> bool:
         try:
             logger.debug("Checking remote command availability: command=%s", command)
-            result = self._ssh.run(f"command -v {shlex.quote(command)}")
+            result = self._ssh.run(f"command -v {shlex.quote(command)}", timeout=30)
             return result.returncode == 0
         except Exception:
             return False
@@ -231,7 +231,7 @@ class TransferRunner:
             commands.append(f"{doveadm} process status >/dev/null 2>&1")
             if include_ssh and not self.dry_run:
                 remote_sudo = f"{shlex.quote(self.config.commands.sudo)} " if self._needs_remote_sudo() else ""
-                remote_status = self._ssh.run(f"{remote_sudo}{doveadm} process status >/dev/null 2>&1")
+                remote_status = self._ssh.run(f"{remote_sudo}{doveadm} process status >/dev/null 2>&1", timeout=60)
                 if remote_status.returncode != 0:
                     raise TransferError("Remote doveadm preflight failed")
         return commands
@@ -245,7 +245,7 @@ class TransferRunner:
         remote_tar = shlex.quote(self.config.commands.tar)
         remote_cmd = f"{sudo}mkdir -p {shlex.quote(target_dir)} && {remote_codec}{sudo}{remote_tar} -C {shlex.quote(target_dir)} -xpf -"
         command = f"{tar} -C {src} -cf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
-        self.run(command)
+        self.run(command, timeout=self._transfer_timeout())
 
     def _select_file_transfer_codec(self) -> tuple[str, str]:
         if self._file_transfer_codec is not None:
@@ -295,7 +295,11 @@ class TransferRunner:
         remote = f"{ssh_prefix} {shlex.quote(remote_inner)}"
         command = f"{doveadm} backup -u {shlex.quote(mailbox)} {remote}"
         logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
-        self.run(command)
+        self.run(command, timeout=self._transfer_timeout())
+
+    def _transfer_timeout(self) -> float | None:
+        timeout = float(getattr(self.config.behavior, "transfer_timeout_seconds", 0))
+        return timeout if timeout > 0 else None
 
     def read_remote_file(self, path: str) -> str:
         if self.dry_run:

@@ -89,6 +89,7 @@ class BehaviorConfig:
     database_exists: str = "fail"
     mailbox_exists: str = "skip"
     local_command_timeout_seconds: int = 0
+    transfer_timeout_seconds: int = 0
 
 
 @dataclass(frozen=True)
@@ -162,6 +163,7 @@ def load_config(path: str | Path) -> AppConfig:
     behavior_cfg = BehaviorConfig(
         dry_run_default=as_bool(behavior.get("dry_run_default", True), default=True),
         local_command_timeout_seconds=int(behavior.get("local_command_timeout_seconds", 0)),
+        transfer_timeout_seconds=int(behavior.get("transfer_timeout_seconds", 0)),
         domain_exists=_exists_policy(behavior, "domain_exists", "fail"),
         database_exists=_exists_policy(behavior, "database_exists", "fail"),
         mailbox_exists=_exists_policy(behavior, "mailbox_exists", "skip"),

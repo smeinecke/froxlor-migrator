@@ -32,7 +32,7 @@ class DummyRunner:
     def ssh_transport(self):
         return object()
 
-    def run(self, command: str):
+    def run(self, command: str, timeout: float | None = None):  # noqa: ARG002
         return None
 
     def read_remote_file(self, path: str) -> str:
@@ -52,6 +52,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
             mysql=SimpleNamespace(target_panel_database="froxlor"),
             commands=SimpleNamespace(ssh="ssh", mysql="mysql", mysqldump="mysqldump"),
             ssh=SimpleNamespace(strict_host_key_checking=False, port=22, user="root", host="localhost"),
+            behavior=SimpleNamespace(transfer_timeout_seconds=0),
         )
         self.source = MagicMock()
         self.target = MagicMock()
@@ -154,7 +155,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
     def test_transfer_database_with_defaults_executes_commands_and_cleans_up(self) -> None:
         calls: list[str] = []
-        self.runner.run = lambda cmd: calls.append(cmd)
+        self.runner.run = lambda cmd, timeout=None: calls.append(cmd)
         self.runner.write_remote_file = lambda path, content, mode=0o600: calls.append(f"write:{path}")
         self.runner.upload_file = lambda src, dest, mode=0o600: calls.append(f"upload:{src}->{dest}")
         self.runner.run_remote = lambda cmd, check=True: calls.append(cmd)

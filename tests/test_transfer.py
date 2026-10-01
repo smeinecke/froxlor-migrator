@@ -63,7 +63,7 @@ class TransferRunnerTests(unittest.TestCase):
                 super().__init__(*args, **kwargs)
                 self.commands: list[str] = []
 
-            def run(self, command: str, check: bool = True):  # noqa: ARG002
+            def run(self, command: str, check: bool = True, timeout: float | None = None):  # noqa ARG002
                 self.commands.append(command)
                 return None
 
@@ -127,7 +127,7 @@ class TransferRunnerTests(unittest.TestCase):
             def _ssh_target_is_local(self) -> bool:
                 return False
 
-            def run(self, command: str, check: bool = True):  # noqa: ARG002
+            def run(self, command: str, check: bool = True, timeout: float | None = None):  # noqa ARG002
                 self.commands.append(command)
                 return None
 
@@ -150,7 +150,7 @@ class TransferRunnerTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.commands: list[str] = []
 
-            def run(self, command: str):
+            def run(self, command: str, timeout: float | None = None):  # noqa: ARG002
                 self.commands.append(command)
                 return type("Result", (), {"returncode": 0})()
 
@@ -167,7 +167,7 @@ class TransferRunnerTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.commands: list[str] = []
 
-            def run(self, command: str):
+            def run(self, command: str, timeout: float | None = None):  # noqa: ARG002
                 self.commands.append(command)
                 return type("Result", (), {"returncode": 0})()
 
@@ -239,7 +239,7 @@ class TransferRunnerTests(unittest.TestCase):
                 super().__init__(*args, **kwargs)
                 self.commands: list[str] = []
 
-            def run(self, command: str, check: bool = True):  # noqa: ARG002
+            def run(self, command: str, check: bool = True, timeout: float | None = None):  # noqa ARG002
                 self.commands.append(command)
                 return None
 
@@ -260,7 +260,7 @@ class TransferRunnerTests(unittest.TestCase):
 
     def test_run_remote_redacts_sensitive_output_in_manifest(self) -> None:
         class SshStub:
-            def run(self, command: str, sensitive: bool = False):  # noqa: ARG002
+            def run(self, command: str, timeout: float | None = None, sensitive: bool = False):  # noqa: ARG002
                 return type("Result", (), {"returncode": 0, "stdout": "secret-data", "stderr": "err-data"})()
 
         with tempfile.TemporaryDirectory() as tmpdir:
