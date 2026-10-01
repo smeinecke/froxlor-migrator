@@ -54,6 +54,14 @@ class ApiClientTests(unittest.TestCase):
 
         self.assertEqual([{"customerid": 10, "loginname": "alpha"}], filtered)
 
+    def test_filter_customer_rows_keeps_rows_missing_the_filtered_field(self) -> None:
+        client = StubClient()
+        # Per-mailbox forwarder/sender rows may lack customerid entirely;
+        # they must not be silently dropped by the post-filter.
+        rows = [{"emailaddr": "a@x", "destination": "b@y"}]
+        self.assertEqual(rows, client._filter_customer_rows(rows, customerid=10, loginname=None))
+        self.assertEqual(rows, client._filter_customer_rows(rows, customerid=None, loginname="other"))
+
     def test_list_email_forwarders_normalizes_payload(self) -> None:
         client = StubClient()
         client.queue({
@@ -149,8 +157,40 @@ class ApiClientTests(unittest.TestCase):
             return DummyResponse(200, {"data": {"ok": True}})
 
         with patch("froxlor_migrator.api.requests.post", side_effect=fake_post):
-            data = client.call("cmd")
+            data = client.call("Customers.listing")
             self.assertEqual({"ok": True}, data)
+
+    def test_call_does_not_retry_mutating_commands(self) -> None:
+        client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
+
+        from requests.exceptions import RequestException
+
+        def fake_post(*args, **kwargs):
+            raise RequestException("network")
+
+        with patch("froxlor_migrator.api.requests.post", side_effect=fake_post) as mock_post:
+            with self.assertRaises(FroxlorApiError):
+                client.call("Domains.add", {"domainname": "example.test"})
+            self.assertEqual(mock_post.call_count, 1)
+
+    def test_call_logs_redact_sensitive_params(self) -> None:
+        from froxlor_migrator.api import _redact_params
+
+        redacted = _redact_params({
+            "domainname": "example.test",
+            "new_customer_password": "topsecret",
+            "email_password": "pw",
+            "ssl_key_file": "-----BEGIN PRIVATE KEY-----",
+            "data_2fa": "TOTPSECRET",
+            "nested": {"ftp_password": "pw2", "path": "/x"},
+        })
+        self.assertEqual("example.test", redacted["domainname"])
+        self.assertEqual("***", redacted["new_customer_password"])
+        self.assertEqual("***", redacted["email_password"])
+        self.assertEqual("***", redacted["ssl_key_file"])
+        self.assertEqual("***", redacted["data_2fa"])
+        self.assertEqual("***", redacted["nested"]["ftp_password"])
+        self.assertEqual("/x", redacted["nested"]["path"])
 
     def test_call_raises_on_http_error(self) -> None:
         client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
@@ -268,7 +308,7 @@ class ApiClientTests(unittest.TestCase):
 
         with patch("froxlor_migrator.api.requests.post", side_effect=fake_post) as mock_post:
             with self.assertRaises(FroxlorApiError):
-                client.call("cmd")
+                client.call("Customers.listing")
             self.assertEqual(mock_post.call_count, 2)
 
     def test_test_connection_calls_list_functions(self) -> None:

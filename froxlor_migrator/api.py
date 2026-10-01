@@ -19,6 +19,29 @@ class FroxlorApiError(RuntimeError):
 logger = logging.getLogger(__name__)
 
 
+_SENSITIVE_PARAM_MARKERS = ("password", "passwd", "secret", "ssl_key", "private_key", "privatekey", "data_2fa", "token", "apikey", "api_key")
+
+
+def _is_idempotent_command(command: str) -> bool:
+    lowered = command.lower()
+    return lowered.endswith(".listing") or ".list" in lowered or ".get" in lowered
+
+
+def _redact_params(params: Any) -> Any:
+    if isinstance(params, dict):
+        redacted: dict[str, Any] = {}
+        for key, value in params.items():
+            lowered = str(key).lower()
+            if any(marker in lowered for marker in _SENSITIVE_PARAM_MARKERS):
+                redacted[key] = "***"
+            elif isinstance(value, dict):
+                redacted[key] = _redact_params(value)
+            else:
+                redacted[key] = value
+        return redacted
+    return params
+
+
 @dataclass
 class FroxlorClient:
     api_url: str
@@ -39,7 +62,7 @@ class FroxlorClient:
             "Froxlor API call: command=%s url=%s params=%s",
             command,
             self.api_url,
-            params or {},
+            _redact_params(params or {}),
         )
 
         try:
@@ -53,8 +76,11 @@ class FroxlorClient:
                 timeout=self.timeout_seconds,
             )
         except RequestException as exc:
+            if not _is_idempotent_command(command):
+                logger.debug("Froxlor API request failed (mutating command, not retried): command=%s error=%s", command, exc)
+                raise FroxlorApiError(f"API {command} request failed: {exc}") from exc
             logger.debug("Froxlor API request failed, retrying once: command=%s error=%s", command, exc)
-            # Network-level failures can be transient; retry once.
+            # Network-level failures can be transient; retry once for reads only.
             time.sleep(0.5)
             try:
                 response = requests.post(
@@ -275,8 +301,12 @@ class FroxlorClient:
         for row in rows:
             row_customer_id = row.get("customerid")
             row_login = str(row.get("loginname", "")).strip().lower()
-            if customerid is not None and int(row_customer_id or 0) != int(customerid):
-                continue
+            # Rows that do not expose the filtered field at all are kept: some
+            # listings (e.g. per-mailbox forwarders/senders) lack customerid but
+            # are already scoped to the queried customer.
+            if customerid is not None and row_customer_id not in (None, ""):
+                if int(row_customer_id or 0) != int(customerid):
+                    continue
             if wanted_login and row_login and row_login != wanted_login:
                 continue
             filtered.append(row)
