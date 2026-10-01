@@ -689,13 +689,32 @@ class MigratorCore:
         sql = f"UPDATE panel_customers SET type_2fa={type_2fa}, data_2fa={self._sql_utf8_literal(data_2fa)} WHERE customerid={target_customer_id};"
         self._exec_target_panel_sql(sql)
 
+    def _load_source_ftp_password_hashes(self, ftp_accounts: list[dict[str, Any]]) -> dict[str, str]:
+        usernames = {str(pick(row, "username", "ftpuser", default="")).strip().lower() for row in ftp_accounts}
+        usernames.discard("")
+        if not usernames:
+            return {}
+        user_list_sql = ", ".join(self._sql_utf8_literal(name) for name in sorted(usernames))
+        rows = self._run_source_panel_query(f"SELECT username, password FROM ftp_users WHERE username IN ({user_list_sql});")
+        out: dict[str, str] = {}
+        for row in rows:
+            if len(row) < 2:
+                continue
+            out[row[0].strip().lower()] = row[1]
+        return out
+
     def _sync_ftp_password_hashes(self, target_customer_id: int, ftp_accounts: list[dict[str, Any]]) -> None:
+        # Ftps.listing strips `password` — hashes only exist in the panel DB.
+        source_hashes = self._load_source_ftp_password_hashes(ftp_accounts)
         statements: list[str] = []
         for row in ftp_accounts:
             username = str(pick(row, "username", "ftpuser", default="")).strip().lower()
-            password_hash = str(pick(row, "password", default="")).strip()
             if not username:
                 continue
+            if username not in source_hashes:
+                self._debug("skip_ftp_without_source_hash", username=username)
+                continue
+            password_hash = source_hashes[username].strip()
             if not password_hash:
                 raise MigrationError(f"Source FTP account has empty password hash: {username}")
             statements.append(

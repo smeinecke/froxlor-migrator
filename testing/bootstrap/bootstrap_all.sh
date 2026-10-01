@@ -59,9 +59,15 @@ docker run --rm -v "$ROOT_DIR/data/target/customers:/mnt" alpine:3.21 sh -lc 'rm
 docker compose up -d --build --force-recreate source-db target-db source-froxlor target-froxlor
 "$SCRIPT_DIR/install_wizard.sh"
 
-# Enable allowed-sender aliases for mailbox testing/migration.
-docker compose exec -T source-db sh -lc "MYSQL_PWD='${SOURCE_DB_ROOT_PASSWORD:-source-root}' mariadb -u'${SOURCE_DB_ROOT_USER:-root}' '${SOURCE_DB_NAME:-froxlor}' -e \"UPDATE panel_settings SET value='1' WHERE settinggroup='mail' AND varname='enable_allow_sender';\""
-docker compose exec -T target-db sh -lc "MYSQL_PWD='${TARGET_DB_ROOT_PASSWORD:-target-root}' mariadb -u'${TARGET_DB_ROOT_USER:-root}' '${TARGET_DB_NAME:-froxlor}' -e \"UPDATE panel_settings SET value='1' WHERE settinggroup='mail' AND varname='enable_allow_sender';\""
+# Enable features exercised by the testbed: allowed-sender aliases, DNS zones,
+# and data-dump schedules.
+for svc_db in source-db target-db; do
+	case "$svc_db" in
+		source-db) db_user="${SOURCE_DB_ROOT_USER:-root}"; db_pass="${SOURCE_DB_ROOT_PASSWORD:-source-root}"; db_name="${SOURCE_DB_NAME:-froxlor}" ;;
+		target-db) db_user="${TARGET_DB_ROOT_USER:-root}"; db_pass="${TARGET_DB_ROOT_PASSWORD:-target-root}"; db_name="${TARGET_DB_NAME:-froxlor}" ;;
+	esac
+	docker compose exec -T "$svc_db" sh -lc "MYSQL_PWD='${db_pass}' mariadb -u'${db_user}' '${db_name}' -e \"UPDATE panel_settings SET value='1' WHERE (settinggroup='mail' AND varname='enable_allow_sender') OR (settinggroup='system' AND varname IN ('dnsenabled','exportenabled'));\""
+done
 
 "$SCRIPT_DIR/create_api_keys.sh"
 

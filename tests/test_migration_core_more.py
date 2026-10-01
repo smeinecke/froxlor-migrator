@@ -169,10 +169,13 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertTrue(any(c.startswith("write:") for c in calls))
 
     def test_sync_ftp_password_hashes_errors_and_builds_sql(self) -> None:
+        # Ftps.listing strips `password`, so hashes come from the panel DB.
+        self.core._run_source_panel_query = lambda sql: [["u", ""]]  # empty hash
         self.core._exec_target_panel_sql = lambda sql: setattr(self, "executed_sql", sql)
         with self.assertRaises(MigrationError):
             self.core._sync_ftp_password_hashes(1, [{"username": "u", "password": ""}])
 
+        self.core._run_source_panel_query = lambda sql: [["u", "hash"]]
         self.core._sync_ftp_password_hashes(2, [{"username": "u", "password": "hash"}])
         self.assertIn("UPDATE ftp_users", getattr(self, "executed_sql", ""))
 
