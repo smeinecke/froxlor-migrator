@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..util import as_bool, as_int, data_dump_key, ftp_username, mailbox_address, pick, random_password, ssh_key_identity
@@ -17,63 +18,60 @@ class MigratorAccountOps:
         def _mailbox_address(self, mailbox: ResourceRow) -> str: ...
         def _relative_customer_path(self, path: str, customer_login: str) -> str: ...
 
-    def _ensure_email_forwarders(self, target_customer_id: int, forwarders: list[dict[str, Any]]) -> None:
-        if not forwarders:
+    def _ensure_mail_attribute_rows(
+        self,
+        target_customer_id: int,
+        rows: list[dict[str, Any]],
+        list_target_rows: Callable[[], list[dict[str, Any]]],
+        value_field: str,
+        add_command: str,
+    ) -> None:
+        """Shared forwarder/sender-alias dedup+add loop: rows are keyed by
+        (mailbox address, value_field) and missing keys are added."""
+        if not rows:
             return
-        target_rows = self.target.list_email_forwarders(customerid=target_customer_id)
         existing = {
             (
                 mailbox_address(row),
-                str(pick(row, "destination", default="")).strip().lower(),
+                str(pick(row, value_field, default="")).strip().lower(),
             )
-            for row in target_rows
+            for row in list_target_rows()
         }
-        for row in forwarders:
+        for row in rows:
             emailaddr = mailbox_address(row)
-            destination = str(pick(row, "destination", default="")).strip().lower()
-            if not emailaddr or not destination:
+            value = str(pick(row, value_field, default="")).strip().lower()
+            if not emailaddr or not value:
                 continue
-            key = (emailaddr, destination)
+            key = (emailaddr, value)
             if key in existing:
                 continue
             self.target.call(
-                "EmailForwarders.add",
+                add_command,
                 {
                     "emailaddr": emailaddr,
-                    "destination": destination,
+                    value_field: value,
                     "customerid": target_customer_id,
                 },
             )
             existing.add(key)
 
+    def _ensure_email_forwarders(self, target_customer_id: int, forwarders: list[dict[str, Any]]) -> None:
+        self._ensure_mail_attribute_rows(
+            target_customer_id,
+            forwarders,
+            lambda: self.target.list_email_forwarders(customerid=target_customer_id),
+            "destination",
+            "EmailForwarders.add",
+        )
+
     def _ensure_email_sender_aliases(self, target_customer_id: int, sender_aliases: list[dict[str, Any]]) -> None:
-        if not sender_aliases:
-            return
-        target_rows = self.target.list_email_senders(customerid=target_customer_id)
-        existing = {
-            (
-                mailbox_address(row),
-                str(pick(row, "allowed_sender", default="")).strip().lower(),
-            )
-            for row in target_rows
-        }
-        for row in sender_aliases:
-            emailaddr = mailbox_address(row)
-            allowed_sender = str(pick(row, "allowed_sender", default="")).strip().lower()
-            if not emailaddr or not allowed_sender:
-                continue
-            key = (emailaddr, allowed_sender)
-            if key in existing:
-                continue
-            self.target.call(
-                "EmailSender.add",
-                {
-                    "emailaddr": emailaddr,
-                    "allowed_sender": allowed_sender,
-                    "customerid": target_customer_id,
-                },
-            )
-            existing.add(key)
+        self._ensure_mail_attribute_rows(
+            target_customer_id,
+            sender_aliases,
+            lambda: self.target.list_email_senders(customerid=target_customer_id),
+            "allowed_sender",
+            "EmailSender.add",
+        )
 
     def _ensure_ftp_accounts(
         self,

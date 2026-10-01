@@ -16,7 +16,7 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
 from .migrate import MigrationError, Migrator, Selection
 from .transfer import TransferError, TransferRunner
-from .util import as_int, ftp_username, mailbox_address, parse_multi_select, pick, resolve_subdomain_parts, slugify
+from .util import as_int, domain_name, ftp_username, mailbox_address, parse_multi_select, pick, resolve_subdomain_parts, slugify
 
 console = Console()
 
@@ -135,29 +135,27 @@ def _ip_aliases(row: dict) -> list[str]:
     return aliases
 
 
-def _build_php_mapping_tokens(resolved_map: dict[int, int], source_settings: list[dict], target_settings: list[dict]) -> dict[str, str]:
-    if not resolved_map:
-        return {}
-    source_by_id = {as_int(pick(row, "id", default=0)): row for row in source_settings}
-    target_by_id = {as_int(pick(row, "id", default=0)): row for row in target_settings}
-    tokens: dict[str, str] = {}
-    for source_id, target_id in sorted(resolved_map.items()):
-        source_row = source_by_id.get(source_id)
-        target_row = target_by_id.get(target_id)
-        if source_row is None or target_row is None:
-            continue
-        source_desc = str(pick(source_row, "description", default="")).strip()
-        source_bin = str(pick(source_row, "binary", default="")).strip()
-        target_desc = str(pick(target_row, "description", default="")).strip()
-        target_bin = str(pick(target_row, "binary", default="")).strip()
-        source_token = f"{source_desc}|{source_bin}".strip("|").lower()
-        target_token = f"{target_desc}|{target_bin}".strip("|").lower()
-        if source_token and target_token:
-            tokens[source_token] = target_token
-    return tokens
+def _php_setting_token(row: dict) -> str:
+    desc = str(pick(row, "description", default="")).strip()
+    binary = str(pick(row, "binary", default="")).strip()
+    return f"{desc}|{binary}".strip("|").lower()
 
 
-def _build_ip_mapping_tokens(resolved_map: dict[int, int], source_rows: list[dict], target_rows: list[dict]) -> dict[str, str]:
+def _ip_token(row: dict) -> str:
+    ip = str(pick(row, "ip", default="")).strip()
+    if not ip:
+        return ""
+    port = as_int(pick(row, "port", default=0))
+    ssl = as_int(pick(row, "ssl", default=0))
+    return f"{ip}:{port}:{ssl}".lower()
+
+
+def _build_mapping_tokens(
+    resolved_map: dict[int, int],
+    source_rows: list[dict],
+    target_rows: list[dict],
+    token_getter: Callable[[dict], str],
+) -> dict[str, str]:
     if not resolved_map:
         return {}
     source_by_id = {as_int(pick(row, "id", default=0)): row for row in source_rows}
@@ -168,17 +166,19 @@ def _build_ip_mapping_tokens(resolved_map: dict[int, int], source_rows: list[dic
         target_row = target_by_id.get(target_id)
         if source_row is None or target_row is None:
             continue
-        source_ip = str(pick(source_row, "ip", default="")).strip()
-        source_port = as_int(pick(source_row, "port", default=0))
-        source_ssl = as_int(pick(source_row, "ssl", default=0))
-        target_ip = str(pick(target_row, "ip", default="")).strip()
-        target_port = as_int(pick(target_row, "port", default=0))
-        target_ssl = as_int(pick(target_row, "ssl", default=0))
-        source_token = f"{source_ip}:{source_port}:{source_ssl}".lower()
-        target_token = f"{target_ip}:{target_port}:{target_ssl}".lower()
-        if source_ip and target_ip:
+        source_token = token_getter(source_row)
+        target_token = token_getter(target_row)
+        if source_token and target_token:
             tokens[source_token] = target_token
     return tokens
+
+
+def _build_php_mapping_tokens(resolved_map: dict[int, int], source_settings: list[dict], target_settings: list[dict]) -> dict[str, str]:
+    return _build_mapping_tokens(resolved_map, source_settings, target_settings, _php_setting_token)
+
+
+def _build_ip_mapping_tokens(resolved_map: dict[int, int], source_rows: list[dict], target_rows: list[dict]) -> dict[str, str]:
+    return _build_mapping_tokens(resolved_map, source_rows, target_rows, _ip_token)
 
 
 def _select_rows_by_tokens(
@@ -254,11 +254,11 @@ def _build_replay_command(
             target_customer_login = str(pick(target_customer, "loginname", "login", default="")).strip()
             parts.extend(["--target-customer", str(target_customer_id) if target_customer_id > 0 else target_customer_login])
 
-    domain_names = _dedupe_keep_order([str(pick(row, "domain", "domainname", default="")).strip() for row in selected_domains])
-    subdomain_names = _dedupe_keep_order([str(pick(row, "domain", "domainname", default="")).strip() for row in selected_subdomains])
+    domain_names = _dedupe_keep_order([domain_name(row) for row in selected_domains])
+    subdomain_names = _dedupe_keep_order([domain_name(row) for row in selected_subdomains])
     database_names = _dedupe_keep_order([str(pick(row, "databasename", "dbname", default="")).strip() for row in selected_databases])
-    mailbox_names = _dedupe_keep_order([str(pick(row, "email_full", "email", "emailaddr", default="")).strip() for row in selected_mailboxes])
-    ftp_names = _dedupe_keep_order([str(pick(row, "username", "ftpuser", default="")).strip() for row in selected_ftps])
+    mailbox_names = _dedupe_keep_order([mailbox_address(row) for row in selected_mailboxes])
+    ftp_names = _dedupe_keep_order([ftp_username(row) for row in selected_ftps])
 
     parts.extend(["--domains", ",".join(domain_names) if domain_names else "none"])
     parts.extend(["--subdomains", ",".join(subdomain_names) if subdomain_names else "none"])
@@ -411,7 +411,7 @@ def _ftp_view(rows: list[dict]) -> list[dict]:
 def _mail_view(emails: list[dict], selected_domains: set[str]) -> list[dict]:
     view = []
     for item in emails:
-        email = str(pick(item, "email_full", "email", "emailaddr", default="")).lower()
+        email = mailbox_address(item)
         domain = email.split("@", 1)[1] if "@" in email else ""
         if selected_domains and domain not in selected_domains:
             continue
@@ -791,7 +791,7 @@ def run_app() -> None:
             selected_domains = _select_rows_by_tokens(
                 selected_domains,
                 args.domains,
-                lambda row: [str(pick(row, "domain", "domainname", default=""))],
+                lambda row: [domain_name(row)],
                 "domain",
             )
         except ValueError as exc:
@@ -803,7 +803,7 @@ def run_app() -> None:
                 selected_domains = _select_rows_by_tokens(
                     domains,
                     args.domains,
-                    lambda row: [str(pick(row, "domain", "domainname", default=""))],
+                    lambda row: [domain_name(row)],
                     "domain",
                 )
             except ValueError as exc:
@@ -825,12 +825,12 @@ def run_app() -> None:
             )
             selected_domains = [x["_raw"] for x in selected_domain_rows]
 
-    selected_domain_names = {str(pick(domain, "domain", "domainname", default="")).lower() for domain in selected_domains}
+    selected_domain_names = {domain_name(domain) for domain in selected_domains}
     selected_subdomains = [
         item
         for item in subdomains
         if resolve_subdomain_parts(
-            str(pick(item, "domain", "domainname", default="")),
+            domain_name(item),
             str(pick(item, "parentdomain", "maindomain", default="")),
             selected_domain_names,
         )
@@ -848,19 +848,19 @@ def run_app() -> None:
             selected_mailboxes = _select_rows_by_tokens(
                 emails,
                 args.mailboxes,
-                lambda row: [str(pick(row, "email_full", "email", "emailaddr", default=""))],
+                lambda row: [mailbox_address(row)],
                 "mailbox",
             )
             selected_ftps = _select_rows_by_tokens(
                 ftps,
                 args.ftp_accounts,
-                lambda row: [str(pick(row, "username", "ftpuser", default=""))],
+                lambda row: [ftp_username(row)],
                 "FTP account",
             )
             selected_subdomains = _select_rows_by_tokens(
                 selected_subdomains,
                 args.subdomains,
-                lambda row: [str(pick(row, "domain", "domainname", default=""))],
+                lambda row: [domain_name(row)],
                 "subdomain",
             )
         except ValueError as exc:
@@ -896,11 +896,7 @@ def run_app() -> None:
             if not dbs:
                 console.print("[yellow]No databases found for this customer.[/yellow]")
 
-        mailbox_domain_names = selected_domain_names | {
-            str(pick(row, "domain", "domainname", default="")).strip().lower()
-            for row in selected_subdomains
-            if str(pick(row, "domain", "domainname", default="")).strip()
-        }
+        mailbox_domain_names = selected_domain_names | {domain_name(row) for row in selected_subdomains if domain_name(row)}
         mailbox_candidates = _mail_view(emails, mailbox_domain_names)
         if args.mailboxes is not None:
             try:
@@ -929,7 +925,7 @@ def run_app() -> None:
                 selected_subdomains = _select_rows_by_tokens(
                     selected_subdomains,
                     args.subdomains,
-                    lambda row: [str(pick(row, "domain", "domainname", default=""))],
+                    lambda row: [domain_name(row)],
                     "subdomain",
                 )
             except ValueError as exc:
@@ -949,7 +945,7 @@ def run_app() -> None:
                 selected_ftps = _select_rows_by_tokens(
                     ftps,
                     args.ftp_accounts,
-                    lambda row: [str(pick(row, "username", "ftpuser", default=""))],
+                    lambda row: [ftp_username(row)],
                     "FTP account",
                 )
             except ValueError as exc:
@@ -986,11 +982,11 @@ def run_app() -> None:
 
     selected_domain_zones: list[dict] = []
     if include_domain_zones:
-        for domain_name in sorted(selected_domain_names):
+        for zone_domain in sorted(selected_domain_names):
             try:
-                selected_domain_zones.extend(source.list_domain_zones(domainname=domain_name))
+                selected_domain_zones.extend(source.list_domain_zones(domainname=zone_domain))
             except FroxlorApiError as exc:
-                console.print(f"[yellow]Skipping DNS zone for {domain_name}: {exc}[/yellow]")
+                console.print(f"[yellow]Skipping DNS zone for {zone_domain}: {exc}[/yellow]")
                 continue
 
     try:
