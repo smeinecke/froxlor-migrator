@@ -435,3 +435,53 @@ Fixed:
 
 Vulture clean (remaining hits are known false positives: `daemon_threads`
 socketserver attr, `run_app` entry point).
+
+## Integration-test findings (round 4 — docker-compose testbed)
+
+All surfaced by `tests/test_integration_compose.py` running a real
+source→target migration against Froxlor 2.3.x containers. Fixed:
+
+- [x] **`Ftps.listing` strips `password`** — hash sync read API rows that
+  never carry it → `Source FTP account has empty password hash`. Now
+  `_load_source_ftp_password_hashes` queries `ftp_users` on the source
+  panel DB (same pattern as mailbox hashes); missing rows are skipped
+  with a debug event, genuinely empty hashes still raise.
+
+- [x] **`Domains.listing`/`get` strip `dkim_privkey`** — DKIM-enabled
+  domains with a pubkey drift always hit "source private key is empty".
+  `_load_source_dkim_private_key` queries `panel_domains` lazily on
+  mismatch.
+
+- [x] **`EmailSender.add` rejects admin API keys for customer-owned
+  domains** (`validateLocalDomainOwnership` compares against the admin
+  caller's empty `customerid`) — fallback `INSERT IGNORE` into
+  `mail_sender_aliases` when the target mailbox exists and has a mail
+  account; forward-only/absent mailboxes still raise.
+
+- [x] **`Customers.listing` never returns `data_2fa`** (unset in listing
+  and get) — seeded/verified via the panel DB; migrator 2FA sync was
+  already DB-based.
+
+- [x] **`chown` on target fails when the customer system user doesn't
+  exist yet** — Froxlor creates system users via async cron tasks after
+  `Customers.add`. `_fix_transferred_docroot_ownership` probes `id -u`
+  first and emits a debug event instead of aborting; the panel's own
+  cron chowns the homedir when it provisions the user.
+
+- [x] **FTP `path` field does not exist in listings** — `ftp_users` only
+  has absolute `homedir`. The migrator's `target_login` fallback would
+  have created a nested `docroot/<login>` dir for main accounts; now "/"
+  (docroot). `_compare_ftp` derives the target path from `homedir` the
+  same way.
+
+- [x] **`DataDump.listing` returns `panel_tasks` rows with config nested
+  in decoded `data` JSON** — `path`/`dump_*`/`pgp_public_key` top-level
+  picks were all empty, so dumps were silently skipped and verify keyed
+  on `('',0,0,0,'')`. `data_dump_key`, `_ensure_data_dumps`, the seed's
+  `ensure_data_dump`/summary, and `verify_seed` now read `data.destdir`
+  (relativized by the customer login marker) and nested flags.
+
+- [x] **Compose testbed coverage gaps** — `system.dnsenabled` and
+  `system.exportenabled` are now enabled in bootstrap so zone and
+  data-dump paths are exercised; `seed_source.sh` resolves the built
+  image via `docker compose images -q` (project-name independent).
