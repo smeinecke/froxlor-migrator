@@ -18,23 +18,18 @@ from .mysql_driver import query as mysql_query
 from .mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from .ssh_driver import SshDriver
 from .transfer import remote_sudo_prefix
-from .util import as_bool, as_int, is_custom_zone_record, pick, resolve_subdomain_parts
-
-
-def _domain_name(row: dict[str, Any]) -> str:
-    return str(pick(row, "domain", "domainname", default="")).lower()
-
-
-def _mail_name(row: dict[str, Any]) -> str:
-    return str(pick(row, "email_full", "email", "emailaddr", default="")).lower()
-
-
-def _subdomain_name(row: dict[str, Any]) -> str:
-    return str(pick(row, "domain", "domainname", default="")).lower()
-
-
-def _ftp_name(row: dict[str, Any]) -> str:
-    return str(pick(row, "username", "ftpuser", default="")).lower()
+from .util import (
+    as_bool,
+    as_int,
+    data_dump_key,
+    domain_name,
+    ftp_username,
+    is_custom_zone_record,
+    mailbox_address,
+    pick,
+    resolve_subdomain_parts,
+    ssh_key_identity,
+)
 
 
 def _dir_protection_name(row: dict[str, Any]) -> tuple[str, str]:
@@ -46,23 +41,6 @@ def _dir_protection_name(row: dict[str, Any]) -> tuple[str, str]:
 
 def _dir_option_name(row: dict[str, Any]) -> str:
     return str(pick(row, "path", default="")).strip().lower()
-
-
-def _ssh_key_name(row: dict[str, Any]) -> tuple[str, str]:
-    return (
-        str(pick(row, "username", "ftpuser", default="")).strip().lower(),
-        str(pick(row, "ssh_pubkey", default="")).strip(),
-    )
-
-
-def _data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
-    return (
-        str(pick(row, "path", default="")).strip(),
-        as_int(pick(row, "dump_dbs", default=0)),
-        as_int(pick(row, "dump_mail", default=0)),
-        as_int(pick(row, "dump_web", default=0)),
-        str(pick(row, "pgp_public_key", default="")).strip(),
-    )
 
 
 def _docroot_in_any_root(docroot: str, roots: list[str]) -> bool:
@@ -719,19 +697,19 @@ def main() -> int:
             customer_failed = False
 
         try:
-            src_domains = {_domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
-            dst_domains = {_domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)}
-            src_subdomains = {} if args.skip_subdomains else {_subdomain_name(x): x for x in source.list_subdomains(customerid=src_id, loginname=login)}
-            dst_subdomains = {} if args.skip_subdomains else {_subdomain_name(x): x for x in target.list_subdomains(customerid=dst_id, loginname=login)}
+            src_domains = {domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
+            dst_domains = {domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)}
+            src_subdomains = {} if args.skip_subdomains else {domain_name(x): x for x in source.list_subdomains(customerid=src_id, loginname=login)}
+            dst_subdomains = {} if args.skip_subdomains else {domain_name(x): x for x in target.list_subdomains(customerid=dst_id, loginname=login)}
             source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
             migratable_domain_names = {
                 name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
             }
 
-            src_mails = {} if args.skip_mail else {_mail_name(x): x for x in source.list_emails(customerid=src_id, loginname=login)}
-            dst_mails = {} if args.skip_mail else {_mail_name(x): x for x in target.list_emails(customerid=dst_id, loginname=login)}
-            src_ftps = {} if args.skip_ftp else {_ftp_name(x): x for x in source.list_ftps(customerid=src_id, loginname=login)}
-            dst_ftps = {} if args.skip_ftp else {_ftp_name(x): x for x in target.list_ftps(customerid=dst_id, loginname=login)}
+            src_mails = {} if args.skip_mail else {mailbox_address(x): x for x in source.list_emails(customerid=src_id, loginname=login)}
+            dst_mails = {} if args.skip_mail else {mailbox_address(x): x for x in target.list_emails(customerid=dst_id, loginname=login)}
+            src_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in source.list_ftps(customerid=src_id, loginname=login)}
+            dst_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in target.list_ftps(customerid=dst_id, loginname=login)}
             src_dir_protections = (
                 {} if args.skip_dir_protections else {_dir_protection_name(x): x for x in source.list_dir_protections(customerid=src_id, loginname=login)}
             )
@@ -740,14 +718,14 @@ def main() -> int:
             )
             src_dir_options = {} if args.skip_dir_options else {_dir_option_name(x): x for x in source.list_dir_options(customerid=src_id, loginname=login)}
             dst_dir_options = {} if args.skip_dir_options else {_dir_option_name(x): x for x in target.list_dir_options(customerid=dst_id, loginname=login)}
-            src_ssh_keys = {} if args.skip_ssh_keys else {_ssh_key_name(x): x for x in source.list_ssh_keys(customerid=src_id, loginname=login)}
-            dst_ssh_keys = {} if args.skip_ssh_keys else {_ssh_key_name(x): x for x in target.list_ssh_keys(customerid=dst_id, loginname=login)}
+            src_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in source.list_ssh_keys(customerid=src_id, loginname=login)}
+            dst_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in target.list_ssh_keys(customerid=dst_id, loginname=login)}
 
             src_data_dumps = (
-                set() if args.skip_data_dumps else {_data_dump_key(x) for x in source.list_data_dumps(customerid=src_id, loginname=login, strict=True)}
+                set() if args.skip_data_dumps else {data_dump_key(x) for x in source.list_data_dumps(customerid=src_id, loginname=login, strict=True)}
             )
             dst_data_dumps = (
-                set() if args.skip_data_dumps else {_data_dump_key(x) for x in target.list_data_dumps(customerid=dst_id, loginname=login, strict=True)}
+                set() if args.skip_data_dumps else {data_dump_key(x) for x in target.list_data_dumps(customerid=dst_id, loginname=login, strict=True)}
             )
 
             src_forwarders = (
@@ -1001,14 +979,14 @@ def main() -> int:
             failures += 1
             customer_failed = True
 
-        for domain_name, src_redirect in sorted(src_redirects.items()):
-            if domain_name not in dst_redirects:
-                print(f"FAIL customer={login} redirect={domain_name}: missing on target")
+        for redirect_domain, src_redirect in sorted(src_redirects.items()):
+            if redirect_domain not in dst_redirects:
+                print(f"FAIL customer={login} redirect={redirect_domain}: missing on target")
                 failures += 1
                 customer_failed = True
                 continue
-            if src_redirect != dst_redirects[domain_name]:
-                print(f"FAIL customer={login} redirect={domain_name}: source={src_redirect!r} target={dst_redirects[domain_name]!r}")
+            if src_redirect != dst_redirects[redirect_domain]:
+                print(f"FAIL customer={login} redirect={redirect_domain}: source={src_redirect!r} target={dst_redirects[redirect_domain]!r}")
                 failures += 1
                 customer_failed = True
 

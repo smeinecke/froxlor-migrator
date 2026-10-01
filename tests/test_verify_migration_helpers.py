@@ -4,39 +4,40 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from froxlor_migrator.util import (
+    data_dump_key,
+    domain_name,
+    ftp_username,
+    is_custom_zone_record,
+    mailbox_address,
+    ssh_key_identity,
+)
 from froxlor_migrator.verify_migration import (
     _compare_customer,
     _compare_domain,
     _compare_ftp,
     _customer_warnings,
-    _data_dump_key,
     _dir_option_name,
     _dir_protection_name,
     _docroot_in_any_root,
-    _domain_name,
     _expected_ftp_path,
     _expected_target_docroot,
-    _ftp_name,
-    _mail_name,
     _normalize_customer_map,
     _normalize_php_setting_map,
-    _ssh_key_name,
-    _subdomain_name,
     _target_connect_kwargs_via_ssh,
-    is_custom_zone_record,
 )
 
 
 class VerifyMigrationHelpersTests(unittest.TestCase):
     def test_simple_name_helpers_lowercase(self) -> None:
-        self.assertEqual("example.com", _domain_name({"domain": "Example.com"}))
-        self.assertEqual("a@b", _mail_name({"email": "A@B"}))
-        self.assertEqual("a@b", _subdomain_name({"domain": "A@B"}))
+        self.assertEqual("example.com", domain_name({"domain": "Example.com"}))
+        self.assertEqual("a@b", mailbox_address({"email": "A@B"}))
+        self.assertEqual("a@b", domain_name({"domain": "A@B"}))
         self.assertEqual(("/path", "user"), _dir_protection_name({"path": "/Path", "username": "User"}))
         self.assertEqual("/path", _dir_option_name({"path": "/Path"}))
-        self.assertEqual(("user", "key"), _ssh_key_name({"username": "User", "ssh_pubkey": "key"}))
-        self.assertEqual(("/tmp", 1, 2, 3, "k"), _data_dump_key({"path": "/tmp", "dump_dbs": 1, "dump_mail": 2, "dump_web": 3, "pgp_public_key": "k"}))
-        self.assertEqual("ftpuser", _ftp_name({"username": "FTPUser"}))
+        self.assertEqual(("user", "key"), ssh_key_identity({"username": "User", "ssh_pubkey": "key"}))
+        self.assertEqual(("/tmp", 1, 2, 3, "k"), data_dump_key({"path": "/tmp", "dump_dbs": 1, "dump_mail": 2, "dump_web": 3, "pgp_public_key": "k"}))
+        self.assertEqual("ftpuser", ftp_username({"username": "FTPUser"}))
 
     def test_docroot_in_any_root(self) -> None:
         self.assertTrue(_docroot_in_any_root("/var/www/site", ["/var/www"]))

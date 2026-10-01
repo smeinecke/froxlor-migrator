@@ -123,3 +123,29 @@ def is_custom_zone_record(row: dict[str, Any], domainname: str = "") -> bool:
         if record_name in {"", "@"} or (apex and record_name == apex):
             return False
     return True
+
+
+def domain_name(row: dict[str, Any]) -> str:
+    return str(pick(row, "domain", "domainname", default="")).strip().lower()
+
+
+def mailbox_address(row: dict[str, Any]) -> str:
+    return str(pick(row, "email_full", "email", "emailaddr", default="")).strip().lower()
+
+
+def ftp_username(row: dict[str, Any]) -> str:
+    return str(pick(row, "username", "ftpuser", default="")).strip().lower()
+
+
+def ssh_key_identity(row: dict[str, Any]) -> tuple[str, str]:
+    return (ftp_username(row), str(pick(row, "ssh_pubkey", default="")).strip())
+
+
+def data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
+    return (
+        str(pick(row, "path", default="")).strip(),
+        as_int(pick(row, "dump_dbs", default=0)),
+        as_int(pick(row, "dump_mail", default=0)),
+        as_int(pick(row, "dump_web", default=0)),
+        str(pick(row, "pgp_public_key", default="")).strip(),
+    )

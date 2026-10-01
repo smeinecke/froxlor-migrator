@@ -16,7 +16,7 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
 from .migrate import MigrationError, Migrator, Selection
 from .transfer import TransferError, TransferRunner
-from .util import as_int, parse_multi_select, pick, resolve_subdomain_parts, slugify
+from .util import as_int, ftp_username, mailbox_address, parse_multi_select, pick, resolve_subdomain_parts, slugify
 
 console = Console()
 
@@ -42,8 +42,8 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
 def _filter_ssh_keys_for_ftps(ssh_keys: list[dict], ftp_rows: list[dict]) -> list[dict]:
     # SSH keys attach to FTP users; keys for FTP accounts that were not
     # selected cannot be migrated and would hard-fail in _ensure_ssh_keys.
-    ftp_names = {str(pick(item, "username", "ftpuser", default="")).strip().lower() for item in ftp_rows}
-    return [item for item in ssh_keys if str(pick(item, "username", "ftpuser", default="")).strip().lower() in ftp_names]
+    ftp_names = {ftp_username(item) for item in ftp_rows}
+    return [item for item in ssh_keys if ftp_username(item) in ftp_names]
 
 
 def _parse_mapping_arg(raw: str | None, arg_name: str) -> dict[str, str]:
@@ -974,9 +974,9 @@ def run_app() -> None:
         selected_data_dumps = data_dumps
 
     selected_ssh_keys = _filter_ssh_keys_for_ftps(selected_ssh_keys, selected_ftps)
-    mailbox_names = {str(pick(item, "email_full", "email", "emailaddr", default="")).strip().lower() for item in selected_mailboxes}
-    selected_forwarders = [item for item in forwarders if str(pick(item, "email", "emailaddr", default="")).strip().lower() in mailbox_names]
-    selected_sender_aliases = [item for item in sender_aliases if str(pick(item, "email", "emailaddr", default="")).strip().lower() in mailbox_names]
+    mailbox_names = {mailbox_address(item) for item in selected_mailboxes}
+    selected_forwarders = [item for item in forwarders if mailbox_address(item) in mailbox_names]
+    selected_sender_aliases = [item for item in sender_aliases if mailbox_address(item) in mailbox_names]
 
     include_certificates = not args.skip_certificates
     include_domain_zones = not args.skip_dns_zones

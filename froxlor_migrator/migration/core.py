@@ -4,10 +4,10 @@ import json
 import re
 import shlex
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from uuid import uuid4
 
 from ..api import FroxlorApiError, FroxlorClient
@@ -25,8 +25,10 @@ from ..mysql_driver import execute as mysql_execute
 from ..mysql_driver import query as mysql_query
 from ..mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from ..transfer import TransferRunner, remote_sudo_prefix
-from ..util import as_int, pick
+from ..util import as_int, domain_name, mailbox_address, pick
 from .types import MigrationError, ResourceRow, Selection
+
+T = TypeVar("T")
 
 
 class MigratorCore:
@@ -115,14 +117,11 @@ class MigratorCore:
     def _customer_login(self, customer: ResourceRow) -> str:
         return str(pick(customer, "loginname", "login", default="")).strip()
 
-    def _customer_email(self, customer: ResourceRow) -> str:
-        return str(pick(customer, "email", default="")).strip().lower()
-
     def _domain_name(self, domain: ResourceRow) -> str:
-        return str(pick(domain, "domain", "domainname", default="")).strip().lower()
+        return domain_name(domain)
 
     def _mailbox_address(self, mailbox: ResourceRow) -> str:
-        return str(pick(mailbox, "email_full", "email", "emailaddr", default="")).strip().lower()
+        return mailbox_address(mailbox)
 
     def _coerce_id_list(self, value: Any, fallback: list[int]) -> list[int]:
         if isinstance(value, list):
@@ -514,58 +513,67 @@ class MigratorCore:
         except Exception as exc:
             raise MigrationError(f"Source panel SQL query failed: {str(exc)[:400]}") from exc
 
-    def _run_target_mysql_query(self, sql: str, database: str) -> list[list[str]]:
-        if self.runner.dry_run:
-            return []
-        try:
-            with self._target_mysql_connect_kwargs() as connect_kwargs:
-                return mysql_query(connect_kwargs, database, sql)
-        except Exception as exc:
-            self._debug(
-                "target_sql_query_failed_over_tunnel",
-                database=database,
-                error=str(exc)[:400],
-            )
-            if not self._allow_remote_mysql_fallback(database):
-                raise MigrationError(f"Target SQL query failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})") from exc
-            try:
-                output = self._run_target_mysql_via_remote_cli(sql, database)
-                rows: list[list[str]] = []
-                for line in output.splitlines():
-                    rows.append(["" if cell == "NULL" else cell for cell in line.split("\t")])
-                self._debug("target_sql_query_fallback_remote_cli_success", database=database, rows=len(rows))
-                return rows
-            except Exception as fallback_exc:
-                raise MigrationError(
-                    f"Target SQL query failed: {str(exc)[:250]} | fallback via remote mysql failed: {str(fallback_exc)[:250]}"
-                ) from fallback_exc
-
-    def _run_target_panel_query(self, sql: str) -> list[list[str]]:
-        return self._run_target_mysql_query(sql, self.config.mysql.target_panel_database)
-
-    def _exec_target_mysql_sql(self, sql: str, database: str) -> None:
+    def _with_target_mysql(
+        self,
+        action: str,
+        database: str,
+        tunnel_fn: Callable[[dict[str, Any]], T],
+        cli_fallback_fn: Callable[[], T],
+    ) -> T:
+        """Run ``tunnel_fn`` over the SSH MySQL tunnel; on failure, fall back to
+        the remote mysql CLI via ``cli_fallback_fn`` when the database allows it.
+        """
         connect_summary: dict[str, Any] | None = None
         try:
             with self._target_mysql_connect_kwargs() as connect_kwargs:
                 connect_summary = self._redact_connect_kwargs(connect_kwargs)
-                mysql_execute(connect_kwargs, database, sql)
+                return tunnel_fn(connect_kwargs)
         except Exception as exc:
             self._debug(
-                "target_sql_execution_failed_over_tunnel",
+                f"target_sql_{action}_failed_over_tunnel",
                 database=database,
                 error=str(exc)[:400],
                 connect_kwargs=connect_summary,
             )
             if not self._allow_remote_mysql_fallback(database):
-                raise MigrationError(f"Target SQL execution failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})") from exc
+                raise MigrationError(f"Target SQL {action} failed: {str(exc)[:300]} (remote mysql fallback disabled for panel DB {database!r})") from exc
             try:
-                self._run_target_mysql_via_remote_cli(sql, database)
-                self._debug("target_sql_execution_fallback_remote_cli_success", database=database)
-                return
+                result = cli_fallback_fn()
+                self._debug(f"target_sql_{action}_fallback_remote_cli_success", database=database)
+                return result
             except Exception as fallback_exc:
                 raise MigrationError(
-                    f"Target SQL execution failed: {str(exc)[:250]} | fallback via remote mysql failed: {str(fallback_exc)[:250]}"
+                    f"Target SQL {action} failed: {str(exc)[:250]} | fallback via remote mysql failed: {str(fallback_exc)[:250]}"
                 ) from fallback_exc
+
+    def _run_target_mysql_query(self, sql: str, database: str) -> list[list[str]]:
+        if self.runner.dry_run:
+            return []
+
+        def parse_cli_output() -> list[list[str]]:
+            output = self._run_target_mysql_via_remote_cli(sql, database)
+            return [["" if cell == "NULL" else cell for cell in line.split("\t")] for line in output.splitlines()]
+
+        return self._with_target_mysql(
+            "query",
+            database,
+            lambda connect_kwargs: mysql_query(connect_kwargs, database, sql),
+            parse_cli_output,
+        )
+
+    def _run_target_panel_query(self, sql: str) -> list[list[str]]:
+        return self._run_target_mysql_query(sql, self.config.mysql.target_panel_database)
+
+    def _exec_target_mysql_sql(self, sql: str, database: str) -> None:
+        def cli_fallback() -> None:
+            self._run_target_mysql_via_remote_cli(sql, database)
+
+        self._with_target_mysql(
+            "execution",
+            database,
+            lambda connect_kwargs: mysql_execute(connect_kwargs, database, sql),
+            cli_fallback,
+        )
 
     def _exec_target_panel_sql(self, sql: str) -> None:
         self._exec_target_mysql_sql(sql, self.config.mysql.target_panel_database)

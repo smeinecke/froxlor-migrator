@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from ..util import as_bool, as_int, pick, random_password
+from ..util import as_bool, as_int, data_dump_key, ftp_username, mailbox_address, pick, random_password, ssh_key_identity
 from .types import MigrationError, ResourceRow
 
 
@@ -23,13 +23,13 @@ class MigratorAccountOps:
         target_rows = self.target.list_email_forwarders(customerid=target_customer_id)
         existing = {
             (
-                str(pick(row, "email", "emailaddr", default="")).strip().lower(),
+                mailbox_address(row),
                 str(pick(row, "destination", default="")).strip().lower(),
             )
             for row in target_rows
         }
         for row in forwarders:
-            emailaddr = str(pick(row, "email", "emailaddr", default="")).strip().lower()
+            emailaddr = mailbox_address(row)
             destination = str(pick(row, "destination", default="")).strip().lower()
             if not emailaddr or not destination:
                 continue
@@ -52,13 +52,13 @@ class MigratorAccountOps:
         target_rows = self.target.list_email_senders(customerid=target_customer_id)
         existing = {
             (
-                str(pick(row, "email", "emailaddr", default="")).strip().lower(),
+                mailbox_address(row),
                 str(pick(row, "allowed_sender", default="")).strip().lower(),
             )
             for row in target_rows
         }
         for row in sender_aliases:
-            emailaddr = str(pick(row, "email", "emailaddr", default="")).strip().lower()
+            emailaddr = mailbox_address(row)
             allowed_sender = str(pick(row, "allowed_sender", default="")).strip().lower()
             if not emailaddr or not allowed_sender:
                 continue
@@ -133,17 +133,11 @@ class MigratorAccountOps:
     def _ensure_ssh_keys(self, target_customer_id: int, ssh_keys: list[dict[str, Any]]) -> None:
         if not ssh_keys:
             return
-        target_ftp_names = {str(pick(item, "username", "ftpuser", default="")).strip().lower() for item in self.target.list_ftps(customerid=target_customer_id)}
+        target_ftp_names = {ftp_username(item) for item in self.target.list_ftps(customerid=target_customer_id)}
         target_rows = self.target.list_ssh_keys(customerid=target_customer_id)
-        existing = {
-            (
-                str(pick(row, "username", "ftpuser", default="")).strip().lower(),
-                str(pick(row, "ssh_pubkey", default="")).strip(),
-            ): row
-            for row in target_rows
-        }
+        existing = {ssh_key_identity(row): row for row in target_rows}
         for row in ssh_keys:
-            ftp_user = str(pick(row, "username", "ftpuser", default="")).strip().lower()
+            ftp_user = ftp_username(row)
             ssh_pubkey = str(pick(row, "ssh_pubkey", default="")).strip()
             description = str(pick(row, "description", default="")).strip()
             if not ftp_user or not ssh_pubkey:
@@ -174,28 +168,13 @@ class MigratorAccountOps:
                 },
             )
             refreshed = self.target.list_ssh_keys(customerid=target_customer_id)
-            existing = {
-                (
-                    str(pick(item, "username", "ftpuser", default="")).strip().lower(),
-                    str(pick(item, "ssh_pubkey", default="")).strip(),
-                ): item
-                for item in refreshed
-            }
+            existing = {ssh_key_identity(item): item for item in refreshed}
 
     def _ensure_data_dumps(self, target_customer_id: int, data_dumps: list[dict[str, Any]]) -> None:
         if not data_dumps:
             return
         target_rows = self.target.list_data_dumps(customerid=target_customer_id)
-        existing = {
-            (
-                str(pick(row, "path", default="")).strip(),
-                as_int(pick(row, "dump_dbs", default=0)),
-                as_int(pick(row, "dump_mail", default=0)),
-                as_int(pick(row, "dump_web", default=0)),
-                str(pick(row, "pgp_public_key", default="")).strip(),
-            )
-            for row in target_rows
-        }
+        existing = {data_dump_key(row) for row in target_rows}
         for row in data_dumps:
             path = str(pick(row, "path", default="")).strip()
             if not path:
@@ -208,13 +187,7 @@ class MigratorAccountOps:
                 "dump_mail": as_bool(pick(row, "dump_mail", default=0), default=False),
                 "dump_web": as_bool(pick(row, "dump_web", default=0), default=False),
             }
-            key = (
-                payload["path"],
-                int(bool(payload["dump_dbs"])),
-                int(bool(payload["dump_mail"])),
-                int(bool(payload["dump_web"])),
-                payload["pgp_public_key"],
-            )
+            key = data_dump_key(payload)
             if key in existing:
                 continue
             try:

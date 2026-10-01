@@ -32,8 +32,6 @@ def remote_sudo_prefix(config: AppConfig) -> str:
 class CommandResult:
     command: str
     returncode: int
-    started_at: str
-    finished_at: str
     stdout: str = ""
     stderr: str = ""
 
@@ -88,12 +86,10 @@ class TransferRunner:
         return value[:limit] + "\n...[truncated]..."
 
     def run(self, command: str, check: bool = True) -> CommandResult:
-        started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run})
         logger.debug("Local command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
         if self.dry_run:
-            finished = datetime.now(timezone.utc).isoformat()
-            return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
+            return CommandResult(command=command, returncode=0)
 
         completed = subprocess.run(
             ["bash", "-o", "pipefail", "-c", command],
@@ -104,12 +100,9 @@ class TransferRunner:
             print(completed.stdout, end="")
         if completed.stderr:
             print(completed.stderr, end="", file=sys.stderr)
-        finished = datetime.now(timezone.utc).isoformat()
         result = CommandResult(
             command=command,
             returncode=completed.returncode,
-            started_at=started,
-            finished_at=finished,
             stdout=completed.stdout or "",
             stderr=completed.stderr or "",
         )
@@ -306,18 +299,15 @@ class TransferRunner:
         return content
 
     def run_remote(self, command: str, check: bool = True, sensitive: bool = False) -> CommandResult:
-        started = datetime.now(timezone.utc).isoformat()
         self._log_event("command", {"command": command, "dry_run": self.dry_run, "remote": True})
         logger.debug("Remote command start: check=%s dry_run=%s command=%s", check, self.dry_run, command)
         if self.dry_run:
-            finished = datetime.now(timezone.utc).isoformat()
-            return CommandResult(command=command, returncode=0, started_at=started, finished_at=finished)
+            return CommandResult(command=command, returncode=0)
         completed = self._ssh.run(command)
         if completed.stdout and not sensitive:
             print(completed.stdout, end="")
         if completed.stderr and not sensitive:
             print(completed.stderr, end="", file=sys.stderr)
-        finished = datetime.now(timezone.utc).isoformat()
         self._log_event(
             "result",
             {
@@ -338,8 +328,6 @@ class TransferRunner:
         return CommandResult(
             command=command,
             returncode=completed.returncode,
-            started_at=started,
-            finished_at=finished,
             stdout=completed.stdout or "",
             stderr=completed.stderr or "",
         )
