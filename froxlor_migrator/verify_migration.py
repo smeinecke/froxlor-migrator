@@ -680,7 +680,7 @@ def _load_customer_secrets(config, customer_id: int, target: bool, query: Callab
     return (password, type_2fa, data_2fa)
 
 
-def main() -> int:
+def _parse_verify_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify migrated source/target parity")
     parser.add_argument("--config", default="config.toml", help="Path to config TOML")
     parser.add_argument("--customer", action="append", default=[], help="Customer login to verify (repeatable)")
@@ -697,8 +697,426 @@ def main() -> int:
     parser.add_argument("--skip-ssh-keys", action="store_true", help="Skip SSH key comparisons")
     parser.add_argument("--skip-data-dumps", action="store_true", help="Skip data dump comparisons")
     parser.add_argument("--skip-redirects", action="store_true", help="Skip domain redirect comparisons")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+class _Report:
+    """Per-customer result emitter; keeps the failure tally and the
+    'any check failed' flag the OK line depends on."""
+
+    def __init__(self, login: str) -> None:
+        self.login = login
+        self.failures = 0
+        self.failed = False
+
+    def fail(self, detail: str, subject: str = "") -> None:
+        scope = f" {subject}" if subject else ""
+        print(f"FAIL customer={self.login}{scope}: {detail}")
+        self.failures += 1
+        self.failed = True
+
+    def warn(self, detail: str) -> None:
+        print(f"WARN customer={self.login}: {detail}")
+
+    def skip(self, subject: str, detail: str) -> None:
+        print(f"SKIP customer={self.login} {subject}: {detail}")
+
+
+def _custom_zone_records(rows: list[dict[str, Any]], domain: str) -> set[tuple[str, str, int, str, int]]:
+    return {
+        (
+            str(pick(item, "record", default="")).strip().lower(),
+            str(pick(item, "type", default="")).strip().upper(),
+            as_int(pick(item, "prio", default=0)),
+            str(pick(item, "content", default="")).strip(),
+            as_int(pick(item, "ttl", default=18000)),
+        )
+        for item in rows
+        if is_custom_zone_record(item, domain)
+    }
+
+
+def _forwarder_key(x: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(pick(x, "email", "emailaddr", default="")).strip().lower(),
+        str(pick(x, "destination", default="")).strip().lower(),
+    )
+
+
+def _sender_key(x: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(pick(x, "email", "emailaddr", default="")).strip().lower(),
+        str(pick(x, "allowed_sender", default="")).strip().lower(),
+    )
+
+
+def _cert_map(client: FroxlorClient) -> dict[str, dict[str, Any]]:
+    return {str(pick(x, "domainname", "domain", default="")).lower(): x for x in client.listing("Certificates.listing")}
+
+
+def _verify_customer_secrets(
+    report: _Report,
+    config,
+    src_id: int,
+    dst_id: int,
+    panel_query: Callable[[str], list[list[str]]],
+    customer_errs: list[str],
+) -> None:
+    try:
+        src_secrets = _load_customer_secrets(config, src_id, target=False)
+        dst_secrets = _load_customer_secrets(config, dst_id, target=True, query=panel_query)
+    except Exception as exc:
+        report.warn(f"could not query customer password/2FA state ({exc})")
+        return
+    if src_secrets is None or dst_secrets is None:
+        report.warn(f"customer row missing in {'source' if src_secrets is None else 'target'} panel DB")
+        return
+    if src_secrets[0] and src_secrets[0] != dst_secrets[0]:
+        customer_errs.append("password-hash mismatch")
+    if src_secrets[1] != dst_secrets[1]:
+        customer_errs.append(f"type_2fa source={src_secrets[1]!r} target={dst_secrets[1]!r}")
+    if src_secrets[2] != dst_secrets[2]:
+        customer_errs.append("data_2fa mismatch")
+
+
+def _named_rows(rows_fn: Callable[[], list[dict[str, Any]]], key_fn: Callable[[dict[str, Any]], Any], skip: bool) -> dict:
+    return {} if skip else {key_fn(x): x for x in rows_fn()}
+
+
+def _key_set(rows_fn: Callable[[], list[dict[str, Any]]], key_fn: Callable[[dict[str, Any]], Any], skip: bool) -> set:
+    return set() if skip else {key_fn(x) for x in rows_fn()}
+
+
+def _load_customer_resources(
+    args: argparse.Namespace,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    login: str,
+    src_id: int,
+    dst_id: int,
+    source_roots: list[str],
+) -> dict[str, Any] | None:
+    """List every comparable collection for one customer pair.
+
+    Returns None when any listing call fails; the caller records the
+    failure and moves on to the next customer."""
+    try:
+        src_domains = {domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
+        return {
+            "domains": src_domains,
+            "dst_domains": {domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)},
+            "subdomains": _named_rows(lambda: source.list_subdomains(customerid=src_id, loginname=login), domain_name, args.skip_subdomains),
+            "dst_subdomains": _named_rows(lambda: target.list_subdomains(customerid=dst_id, loginname=login), domain_name, args.skip_subdomains),
+            "migratable_domain_names": {
+                name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
+            },
+            "mails": _named_rows(lambda: source.list_emails(customerid=src_id, loginname=login), mailbox_address, args.skip_mail),
+            "dst_mails": _named_rows(lambda: target.list_emails(customerid=dst_id, loginname=login), mailbox_address, args.skip_mail),
+            "ftps": _named_rows(lambda: source.list_ftps(customerid=src_id, loginname=login), ftp_username, args.skip_ftp),
+            "dst_ftps": _named_rows(lambda: target.list_ftps(customerid=dst_id, loginname=login), ftp_username, args.skip_ftp),
+            "dir_protections": _named_rows(
+                lambda: source.list_dir_protections(customerid=src_id, loginname=login),
+                lambda x: _dir_protection_name(x, login),
+                args.skip_dir_protections,
+            ),
+            "dst_dir_protections": _named_rows(
+                lambda: target.list_dir_protections(customerid=dst_id, loginname=login),
+                lambda x: _dir_protection_name(x, login),
+                args.skip_dir_protections,
+            ),
+            "dir_options": _named_rows(
+                lambda: source.list_dir_options(customerid=src_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
+            ),
+            "dst_dir_options": _named_rows(
+                lambda: target.list_dir_options(customerid=dst_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
+            ),
+            "ssh_keys": _named_rows(lambda: source.list_ssh_keys(customerid=src_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
+            "dst_ssh_keys": _named_rows(lambda: target.list_ssh_keys(customerid=dst_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
+            "data_dumps": _key_set(lambda: source.list_data_dumps(customerid=src_id, loginname=login, strict=True), data_dump_key, args.skip_data_dumps),
+            "dst_data_dumps": _key_set(lambda: target.list_data_dumps(customerid=dst_id, loginname=login, strict=True), data_dump_key, args.skip_data_dumps),
+            "forwarders": _key_set(
+                lambda: source.list_email_forwarders(customerid=src_id, loginname=login, strict=True),
+                _forwarder_key,
+                args.skip_forwarders,
+            ),
+            "dst_forwarders": _key_set(
+                lambda: target.list_email_forwarders(customerid=dst_id, loginname=login, strict=True),
+                _forwarder_key,
+                args.skip_forwarders,
+            ),
+            "senders": _key_set(
+                lambda: source.list_email_senders(customerid=src_id, loginname=login, strict=True),
+                _sender_key,
+                args.skip_sender_aliases,
+            ),
+            "dst_senders": _key_set(
+                lambda: target.list_email_senders(customerid=dst_id, loginname=login, strict=True),
+                _sender_key,
+                args.skip_sender_aliases,
+            ),
+            "certs": {} if args.skip_certificates else _cert_map(source),
+            "dst_certs": {} if args.skip_certificates else _cert_map(target),
+        }
+    except FroxlorApiError:
+        return None
+
+
+def _verify_domains(
+    report: _Report,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    args: argparse.Namespace,
+    config,
+    login: str,
+    res: dict[str, Any],
+    source_php_map,
+    target_php_map,
+    source_roots: list[str],
+) -> None:
+    for domain in sorted(res["domains"]):
+        source_docroot = str(pick(res["domains"][domain], "documentroot", default=""))
+        if source_docroot and not _docroot_in_any_root(source_docroot, source_roots):
+            report.skip(
+                f"domain={domain}",
+                f"outside source roots ({config.paths.source_web_root}, {config.paths.source_transfer_root}) ({source_docroot})",
+            )
+            continue
+        if domain not in res["dst_domains"]:
+            report.fail("missing on target", subject=f"domain={domain}")
+            continue
+        errs = _compare_domain(
+            res["domains"][domain],
+            res["dst_domains"][domain],
+            source_php_map,
+            target_php_map,
+            source_roots,
+            config.paths.target_web_root,
+            login,
+        )
+        if errs:
+            report.fail("; ".join(errs), subject=f"domain={domain}")
+        _verify_certificate(report, domain, res["certs"], res["dst_certs"])
+        if not args.skip_domain_zones:
+            _verify_zone(report, source, target, login, domain)
+
+
+def _verify_certificate(report: _Report, domain: str, src_certs: dict, dst_certs: dict) -> None:
+    src_cert = src_certs.get(domain)
+    if not src_cert:
+        return
+    dst_cert = dst_certs.get(domain)
+    if not dst_cert:
+        report.fail("missing on target", subject=f"cert={domain}")
+        return
+    for field in ("ssl_cert_file", "ssl_key_file", "ssl_ca_file", "ssl_cert_chainfile"):
+        if str(pick(src_cert, field, default="")) != str(pick(dst_cert, field, default="")):
+            report.fail(f"{field} mismatch", subject=f"cert={domain}")
+
+
+def _verify_zone(report: _Report, source: FroxlorClient, target: FroxlorClient, login: str, domain: str) -> None:
+    try:
+        src_zone_rows = source.list_domain_zones(domainname=domain, strict=True)
+        dst_zone_rows = target.list_domain_zones(domainname=domain, strict=True)
+    except FroxlorApiError as exc:
+        report.fail(f"could not list zone records ({exc})", subject=f"zone={domain}")
+        return
+    src_zones = _custom_zone_records(src_zone_rows, domain)
+    dst_zones = _custom_zone_records(dst_zone_rows, domain)
+    for zone in sorted(src_zones - dst_zones):
+        report.fail(f"missing custom record {zone}", subject=f"zone={domain}")
+
+
+def _verify_subdomains(report: _Report, login: str, res: dict[str, Any], source_php_map, target_php_map) -> None:
+    for domain in sorted(res["subdomains"]):
+        if resolve_subdomain_parts(domain, "", res["migratable_domain_names"]) is None:
+            continue
+        if domain not in res["dst_subdomains"]:
+            report.fail("missing on target", subject=f"subdomain={domain}")
+            continue
+        errs = _compare_subdomain(
+            res["subdomains"][domain],
+            res["dst_subdomains"][domain],
+            source_php_map,
+            target_php_map,
+            customer_login=login,
+        )
+        if errs:
+            report.fail("; ".join(errs), subject=f"subdomain={domain}")
+
+
+def _verify_mailboxes(report: _Report, src_mails: dict, dst_mails: dict) -> None:
+    for mailbox in sorted(src_mails):
+        if mailbox not in dst_mails:
+            report.fail("missing on target", subject=f"mailbox={mailbox}")
+            continue
+        errs = _compare_mail(src_mails[mailbox], dst_mails[mailbox])
+        if errs:
+            report.fail("; ".join(errs), subject=f"mailbox={mailbox}")
+
+
+def _verify_ftps(
+    report: _Report,
+    login: str,
+    src_ftps: dict,
+    dst_ftps: dict,
+    src_ftp_hashes: dict[str, str],
+    dst_ftp_hashes: dict[str, str],
+    check_password: bool,
+) -> None:
+    for ftp_user in sorted(src_ftps):
+        if ftp_user not in dst_ftps:
+            report.fail("missing on target", subject=f"ftp={ftp_user}")
+            continue
+        errs = _compare_ftp(
+            src_ftps[ftp_user],
+            dst_ftps[ftp_user],
+            source_login=login,
+            target_login=login,
+            check_password=check_password,
+        )
+        if check_password and src_ftp_hashes:
+            src_hash = src_ftp_hashes.get(ftp_user)
+            dst_hash = dst_ftp_hashes.get(ftp_user)
+            if src_hash and dst_hash is not None and src_hash != dst_hash:
+                errs.append("password-hash mismatch")
+            elif src_hash and dst_hash is None:
+                errs.append("password hash missing on target")
+        if errs:
+            report.fail("; ".join(errs), subject=f"ftp={ftp_user}")
+
+
+def _verify_dir_protections(report: _Report, login: str, src: dict, dst: dict, check_password: bool) -> None:
+    for key in sorted(src):
+        if key not in dst:
+            report.fail("missing on target", subject=f"dir-protection={key[0]}:{key[1]}")
+            continue
+        errs = _compare_dir_protection(src[key], dst[key], check_password=check_password, customer_login=login)
+        if errs:
+            report.fail("; ".join(errs), subject=f"dir-protection={key[0]}:{key[1]}")
+
+
+def _verify_dir_options(report: _Report, src: dict, dst: dict) -> None:
+    for path in sorted(src):
+        if path not in dst:
+            report.fail("missing on target", subject=f"dir-option={path}")
+            continue
+        errs = _compare_dir_option(src[path], dst[path])
+        if errs:
+            report.fail("; ".join(errs), subject=f"dir-option={path}")
+
+
+def _verify_ssh_keys(report: _Report, src: dict, dst: dict) -> None:
+    for key in sorted(src):
+        if key not in dst:
+            report.fail("missing public key on target", subject=f"ssh-key={key[0]}")
+            continue
+        src_desc = str(pick(src[key], "description", default="")).strip()
+        dst_desc = str(pick(dst[key], "description", default="")).strip()
+        if src_desc != dst_desc:
+            report.fail(f"description source={src_desc!r} target={dst_desc!r}", subject=f"ssh-key={key[0]}")
+
+
+def _verify_redirects(report: _Report, src_redirects: dict, dst_redirects: dict) -> None:
+    for redirect_domain, src_redirect in sorted(src_redirects.items()):
+        if redirect_domain not in dst_redirects:
+            report.fail("missing on target", subject=f"redirect={redirect_domain}")
+            continue
+        if src_redirect != dst_redirects[redirect_domain]:
+            report.fail(
+                f"source={src_redirect!r} target={dst_redirects[redirect_domain]!r}",
+                subject=f"redirect={redirect_domain}",
+            )
+
+
+def _verify_customer(
+    args: argparse.Namespace,
+    config,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    login: str,
+    source_customers: dict,
+    target_customers: dict,
+    source_php_map,
+    target_php_map,
+    panel_query: Callable[[str], list[list[str]]],
+) -> int:
+    """Verify one customer pair. Returns the number of failed checks."""
+    report = _Report(login)
+    src_customer = source_customers.get(login)
+    dst_customer = target_customers.get(login)
+    if not src_customer or not dst_customer:
+        report.fail(f"missing on {'source' if not src_customer else 'target'}")
+        return report.failures
+
+    src_id = as_int(pick(src_customer, "customerid", "id", default=0))
+    dst_id = as_int(pick(dst_customer, "customerid", "id", default=0))
+
+    customer_errs = _compare_customer(src_customer, dst_customer, check_password=not args.skip_password_sync)
+    if not args.skip_password_sync:
+        _verify_customer_secrets(report, config, src_id, dst_id, panel_query, customer_errs)
+    for warning in _customer_warnings(src_customer, dst_customer):
+        report.warn(warning)
+    if customer_errs:
+        report.fail("; ".join(customer_errs))
+
+    source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
+    res = _load_customer_resources(args, source, target, login, src_id, dst_id, source_roots)
+    if res is None:
+        report.fail("could not list resources")
+        return report.failures
+
+    src_redirects: dict[str, Any] = {}
+    dst_redirects: dict[str, Any] = {}
+    if not args.skip_redirects:
+        try:
+            src_redirects = _load_redirect_map_source(config, src_id)
+            dst_redirects = _load_redirect_map_target(config, dst_id, panel_query)
+        except Exception as exc:
+            report.fail(f"redirects: could not query redirect mappings ({exc})")
+
+    src_ftp_hashes: dict[str, str] = {}
+    dst_ftp_hashes: dict[str, str] = {}
+    if not args.skip_ftp and not args.skip_password_sync:
+        try:
+            src_ftp_hashes = _load_ftp_password_map(config, src_id, target=False)
+            dst_ftp_hashes = _load_ftp_password_map(config, dst_id, target=True, query=panel_query)
+        except Exception as exc:
+            report.warn(f"could not query FTP password hashes ({exc})")
+
+    _verify_domains(report, source, target, args, config, login, res, source_php_map, target_php_map, source_roots)
+    _verify_subdomains(report, login, res, source_php_map, target_php_map)
+    _verify_mailboxes(report, res["mails"], res["dst_mails"])
+    _verify_ftps(
+        report,
+        login,
+        res["ftps"],
+        res["dst_ftps"],
+        src_ftp_hashes,
+        dst_ftp_hashes,
+        check_password=not args.skip_password_sync,
+    )
+    _verify_dir_protections(report, login, res["dir_protections"], res["dst_dir_protections"], check_password=not args.skip_password_sync)
+    _verify_dir_options(report, res["dir_options"], res["dst_dir_options"])
+
+    for emailaddr, destination in sorted(res["forwarders"] - res["dst_forwarders"]):
+        report.fail("missing on target", subject=f"forwarder={emailaddr}->{destination}")
+    for emailaddr, allowed_sender in sorted(res["senders"] - res["dst_senders"]):
+        report.fail("missing on target", subject=f"sender={emailaddr}->{allowed_sender}")
+
+    _verify_ssh_keys(report, res["ssh_keys"], res["dst_ssh_keys"])
+
+    for item in sorted(res["data_dumps"] - res["dst_data_dumps"]):
+        report.fail("missing on target", subject=f"data-dump={item}")
+
+    _verify_redirects(report, src_redirects, dst_redirects)
+
+    if not report.failed:
+        print(f"OK customer={login}: domains/mail/settings/certs match")
+    return report.failures
+
+
+def main() -> int:
+    args = _parse_verify_args()
     config = load_config(args.config)
     source = FroxlorClient(
         config.source.api_url,
@@ -723,10 +1141,7 @@ def main() -> int:
         return 2
 
     requested = [x.strip().lower() for x in args.customer if x.strip()]
-    if requested:
-        logins = requested
-    else:
-        logins = sorted(set(source_customers) & set(target_customers))
+    logins = requested if requested else sorted(set(source_customers) & set(target_customers))
 
     failures = 0
     target_session_stack: ExitStack | None = None
@@ -743,368 +1158,18 @@ def main() -> int:
 
     try:
         for login in logins:
-            src_customer = source_customers.get(login)
-            dst_customer = target_customers.get(login)
-            if not src_customer or not dst_customer:
-                print(f"FAIL customer={login}: missing on {'source' if not src_customer else 'target'}")
-                failures += 1
-                continue
-
-            src_id = as_int(pick(src_customer, "customerid", "id", default=0))
-            dst_id = as_int(pick(dst_customer, "customerid", "id", default=0))
-
-            customer_errs = _compare_customer(src_customer, dst_customer, check_password=not args.skip_password_sync)
-            if not args.skip_password_sync:
-                try:
-                    src_secrets = _load_customer_secrets(config, src_id, target=False)
-                    dst_secrets = _load_customer_secrets(config, dst_id, target=True, query=_target_panel_query)
-                except Exception as exc:
-                    print(f"WARN customer={login}: could not query customer password/2FA state ({exc})")
-                else:
-                    if src_secrets is None or dst_secrets is None:
-                        print(f"WARN customer={login}: customer row missing in {'source' if src_secrets is None else 'target'} panel DB")
-                    else:
-                        if src_secrets[0] and src_secrets[0] != dst_secrets[0]:
-                            customer_errs.append("password-hash mismatch")
-                        if src_secrets[1] != dst_secrets[1]:
-                            customer_errs.append(f"type_2fa source={src_secrets[1]!r} target={dst_secrets[1]!r}")
-                        if src_secrets[2] != dst_secrets[2]:
-                            customer_errs.append("data_2fa mismatch")
-            for warning in _customer_warnings(src_customer, dst_customer):
-                print(f"WARN customer={login}: {warning}")
-            if customer_errs:
-                print(f"FAIL customer={login}: {'; '.join(customer_errs)}")
-                failures += 1
-                customer_failed = True
-            else:
-                customer_failed = False
-
-            try:
-                src_domains = {domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
-                dst_domains = {domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)}
-                src_subdomains = {} if args.skip_subdomains else {domain_name(x): x for x in source.list_subdomains(customerid=src_id, loginname=login)}
-                dst_subdomains = {} if args.skip_subdomains else {domain_name(x): x for x in target.list_subdomains(customerid=dst_id, loginname=login)}
-                source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
-                migratable_domain_names = {
-                    name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
-                }
-
-                src_mails = {} if args.skip_mail else {mailbox_address(x): x for x in source.list_emails(customerid=src_id, loginname=login)}
-                dst_mails = {} if args.skip_mail else {mailbox_address(x): x for x in target.list_emails(customerid=dst_id, loginname=login)}
-                src_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in source.list_ftps(customerid=src_id, loginname=login)}
-                dst_ftps = {} if args.skip_ftp else {ftp_username(x): x for x in target.list_ftps(customerid=dst_id, loginname=login)}
-                src_dir_protections = (
-                    {}
-                    if args.skip_dir_protections
-                    else {_dir_protection_name(x, login): x for x in source.list_dir_protections(customerid=src_id, loginname=login)}
-                )
-                dst_dir_protections = (
-                    {}
-                    if args.skip_dir_protections
-                    else {_dir_protection_name(x, login): x for x in target.list_dir_protections(customerid=dst_id, loginname=login)}
-                )
-                src_dir_options = (
-                    {} if args.skip_dir_options else {_dir_option_name(x, login): x for x in source.list_dir_options(customerid=src_id, loginname=login)}
-                )
-                dst_dir_options = (
-                    {} if args.skip_dir_options else {_dir_option_name(x, login): x for x in target.list_dir_options(customerid=dst_id, loginname=login)}
-                )
-                src_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in source.list_ssh_keys(customerid=src_id, loginname=login)}
-                dst_ssh_keys = {} if args.skip_ssh_keys else {ssh_key_identity(x): x for x in target.list_ssh_keys(customerid=dst_id, loginname=login)}
-
-                src_data_dumps = (
-                    set() if args.skip_data_dumps else {data_dump_key(x) for x in source.list_data_dumps(customerid=src_id, loginname=login, strict=True)}
-                )
-                dst_data_dumps = (
-                    set() if args.skip_data_dumps else {data_dump_key(x) for x in target.list_data_dumps(customerid=dst_id, loginname=login, strict=True)}
-                )
-
-                src_forwarders = (
-                    set()
-                    if args.skip_forwarders
-                    else {
-                        (
-                            str(pick(x, "email", "emailaddr", default="")).strip().lower(),
-                            str(pick(x, "destination", default="")).strip().lower(),
-                        )
-                        for x in source.list_email_forwarders(customerid=src_id, loginname=login, strict=True)
-                    }
-                )
-                dst_forwarders = (
-                    set()
-                    if args.skip_forwarders
-                    else {
-                        (
-                            str(pick(x, "email", "emailaddr", default="")).strip().lower(),
-                            str(pick(x, "destination", default="")).strip().lower(),
-                        )
-                        for x in target.list_email_forwarders(customerid=dst_id, loginname=login, strict=True)
-                    }
-                )
-
-                src_senders = (
-                    set()
-                    if args.skip_sender_aliases
-                    else {
-                        (
-                            str(pick(x, "email", "emailaddr", default="")).strip().lower(),
-                            str(pick(x, "allowed_sender", default="")).strip().lower(),
-                        )
-                        for x in source.list_email_senders(customerid=src_id, loginname=login, strict=True)
-                    }
-                )
-                dst_senders = (
-                    set()
-                    if args.skip_sender_aliases
-                    else {
-                        (
-                            str(pick(x, "email", "emailaddr", default="")).strip().lower(),
-                            str(pick(x, "allowed_sender", default="")).strip().lower(),
-                        )
-                        for x in target.list_email_senders(customerid=dst_id, loginname=login, strict=True)
-                    }
-                )
-
-                src_certs = (
-                    {}
-                    if args.skip_certificates
-                    else {str(pick(x, "domainname", "domain", default="")).lower(): x for x in source.listing("Certificates.listing")}
-                )
-                dst_certs = (
-                    {}
-                    if args.skip_certificates
-                    else {str(pick(x, "domainname", "domain", default="")).lower(): x for x in target.listing("Certificates.listing")}
-                )
-            except FroxlorApiError as exc:
-                print(f"FAIL customer={login}: could not list resources ({exc})")
-                failures += 1
-                continue
-
-            src_redirects: dict[str, Any] = {}
-            dst_redirects: dict[str, Any] = {}
-            if not args.skip_redirects:
-                try:
-                    src_redirects = _load_redirect_map_source(config, src_id)
-                    dst_redirects = _load_redirect_map_target(config, dst_id, _target_panel_query)
-                except Exception as exc:
-                    print(f"FAIL customer={login} redirects: could not query redirect mappings ({exc})")
-                    failures += 1
-                    customer_failed = True
-                    src_redirects = {}
-                    dst_redirects = {}
-
-            src_ftp_hashes: dict[str, str] = {}
-            dst_ftp_hashes: dict[str, str] = {}
-            if not args.skip_ftp and not args.skip_password_sync:
-                try:
-                    src_ftp_hashes = _load_ftp_password_map(config, src_id, target=False)
-                    dst_ftp_hashes = _load_ftp_password_map(config, dst_id, target=True, query=_target_panel_query)
-                except Exception as exc:
-                    print(f"WARN customer={login}: could not query FTP password hashes ({exc})")
-
-            for domain in sorted(src_domains):
-                source_docroot = str(pick(src_domains[domain], "documentroot", default=""))
-                if source_docroot and not _docroot_in_any_root(source_docroot, source_roots):
-                    print(
-                        f"SKIP customer={login} domain={domain}: outside source roots "
-                        f"({config.paths.source_web_root}, {config.paths.source_transfer_root}) ({source_docroot})"
-                    )
-                    continue
-                if domain not in dst_domains:
-                    print(f"FAIL customer={login} domain={domain}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_domain(
-                    src_domains[domain],
-                    dst_domains[domain],
-                    source_php_map,
-                    target_php_map,
-                    source_roots,
-                    config.paths.target_web_root,
-                    login,
-                )
-                if errs:
-                    print(f"FAIL customer={login} domain={domain}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-                src_cert = src_certs.get(domain)
-                if src_cert:
-                    dst_cert = dst_certs.get(domain)
-                    if not dst_cert:
-                        print(f"FAIL customer={login} cert={domain}: missing on target")
-                        failures += 1
-                        customer_failed = True
-                    else:
-                        for field in (
-                            "ssl_cert_file",
-                            "ssl_key_file",
-                            "ssl_ca_file",
-                            "ssl_cert_chainfile",
-                        ):
-                            if str(pick(src_cert, field, default="")) != str(pick(dst_cert, field, default="")):
-                                print(f"FAIL customer={login} cert={domain}: {field} mismatch")
-                                failures += 1
-                                customer_failed = True
-
-                if not args.skip_domain_zones:
-                    try:
-                        src_zone_rows = source.list_domain_zones(domainname=domain, strict=True)
-                        dst_zone_rows = target.list_domain_zones(domainname=domain, strict=True)
-                    except FroxlorApiError as exc:
-                        print(f"FAIL customer={login} zone={domain}: could not list zone records ({exc})")
-                        failures += 1
-                        customer_failed = True
-                        continue
-                    src_zones = {
-                        (
-                            str(pick(item, "record", default="")).strip().lower(),
-                            str(pick(item, "type", default="")).strip().upper(),
-                            as_int(pick(item, "prio", default=0)),
-                            str(pick(item, "content", default="")).strip(),
-                            as_int(pick(item, "ttl", default=18000)),
-                        )
-                        for item in src_zone_rows
-                        if is_custom_zone_record(item, domain)
-                    }
-                    dst_zones = {
-                        (
-                            str(pick(item, "record", default="")).strip().lower(),
-                            str(pick(item, "type", default="")).strip().upper(),
-                            as_int(pick(item, "prio", default=0)),
-                            str(pick(item, "content", default="")).strip(),
-                            as_int(pick(item, "ttl", default=18000)),
-                        )
-                        for item in dst_zone_rows
-                        if is_custom_zone_record(item, domain)
-                    }
-                    missing_zones = sorted(src_zones - dst_zones)
-                    for zone in missing_zones:
-                        print(f"FAIL customer={login} zone={domain}: missing custom record {zone}")
-                        failures += 1
-                        customer_failed = True
-
-            for domain in sorted(src_subdomains):
-                if resolve_subdomain_parts(domain, "", migratable_domain_names) is None:
-                    continue
-                if domain not in dst_subdomains:
-                    print(f"FAIL customer={login} subdomain={domain}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_subdomain(src_subdomains[domain], dst_subdomains[domain], source_php_map, target_php_map, customer_login=login)
-                if errs:
-                    print(f"FAIL customer={login} subdomain={domain}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-
-            for mailbox in sorted(src_mails):
-                if mailbox not in dst_mails:
-                    print(f"FAIL customer={login} mailbox={mailbox}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_mail(src_mails[mailbox], dst_mails[mailbox])
-                if errs:
-                    print(f"FAIL customer={login} mailbox={mailbox}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-
-            for ftp_user in sorted(src_ftps):
-                if ftp_user not in dst_ftps:
-                    print(f"FAIL customer={login} ftp={ftp_user}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_ftp(
-                    src_ftps[ftp_user],
-                    dst_ftps[ftp_user],
-                    source_login=login,
-                    target_login=login,
-                    check_password=not args.skip_password_sync,
-                )
-                if not args.skip_password_sync and src_ftp_hashes:
-                    src_hash = src_ftp_hashes.get(ftp_user)
-                    dst_hash = dst_ftp_hashes.get(ftp_user)
-                    if src_hash and dst_hash is not None and src_hash != dst_hash:
-                        errs.append("password-hash mismatch")
-                    elif src_hash and dst_hash is None:
-                        errs.append("password hash missing on target")
-                if errs:
-                    print(f"FAIL customer={login} ftp={ftp_user}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-
-            for key in sorted(src_dir_protections):
-                if key not in dst_dir_protections:
-                    print(f"FAIL customer={login} dir-protection={key[0]}:{key[1]}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_dir_protection(
-                    src_dir_protections[key], dst_dir_protections[key], check_password=not args.skip_password_sync, customer_login=login
-                )
-                if errs:
-                    print(f"FAIL customer={login} dir-protection={key[0]}:{key[1]}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-
-            for path in sorted(src_dir_options):
-                if path not in dst_dir_options:
-                    print(f"FAIL customer={login} dir-option={path}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                errs = _compare_dir_option(src_dir_options[path], dst_dir_options[path])
-                if errs:
-                    print(f"FAIL customer={login} dir-option={path}: {'; '.join(errs)}")
-                    failures += 1
-                    customer_failed = True
-
-            missing_forwarders = sorted(src_forwarders - dst_forwarders)
-            for emailaddr, destination in missing_forwarders:
-                print(f"FAIL customer={login} forwarder={emailaddr}->{destination}: missing on target")
-                failures += 1
-                customer_failed = True
-
-            missing_senders = sorted(src_senders - dst_senders)
-            for emailaddr, allowed_sender in missing_senders:
-                print(f"FAIL customer={login} sender={emailaddr}->{allowed_sender}: missing on target")
-                failures += 1
-                customer_failed = True
-
-            for key in sorted(src_ssh_keys):
-                if key not in dst_ssh_keys:
-                    print(f"FAIL customer={login} ssh-key={key[0]}: missing public key on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                src_desc = str(pick(src_ssh_keys[key], "description", default="")).strip()
-                dst_desc = str(pick(dst_ssh_keys[key], "description", default="")).strip()
-                if src_desc != dst_desc:
-                    print(f"FAIL customer={login} ssh-key={key[0]}: description source={src_desc!r} target={dst_desc!r}")
-                    failures += 1
-                    customer_failed = True
-
-            missing_data_dumps = sorted(src_data_dumps - dst_data_dumps)
-            for item in missing_data_dumps:
-                print(f"FAIL customer={login} data-dump={item}: missing on target")
-                failures += 1
-                customer_failed = True
-
-            for redirect_domain, src_redirect in sorted(src_redirects.items()):
-                if redirect_domain not in dst_redirects:
-                    print(f"FAIL customer={login} redirect={redirect_domain}: missing on target")
-                    failures += 1
-                    customer_failed = True
-                    continue
-                if src_redirect != dst_redirects[redirect_domain]:
-                    print(f"FAIL customer={login} redirect={redirect_domain}: source={src_redirect!r} target={dst_redirects[redirect_domain]!r}")
-                    failures += 1
-                    customer_failed = True
-
-            if not customer_failed:
-                print(f"OK customer={login}: domains/mail/settings/certs match")
+            failures += _verify_customer(
+                args,
+                config,
+                source,
+                target,
+                login,
+                source_customers,
+                target_customers,
+                source_php_map,
+                target_php_map,
+                _target_panel_query,
+            )
     finally:
         if target_session_stack is not None:
             target_session_stack.close()
