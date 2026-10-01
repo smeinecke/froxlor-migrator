@@ -74,3 +74,27 @@ def ensure_dir(path: str | Path) -> Path:
     target = Path(path)
     target.mkdir(parents=True, exist_ok=True)
     return target
+
+
+def resolve_subdomain_parts(
+    full_name: str,
+    parent_hint: str,
+    known_domains: set[str],
+) -> tuple[str, str] | None:
+    """Resolve a possibly multi-level subdomain into (label, parent domain).
+
+    Returns None when no suffix of ``full_name`` is a known domain.
+    """
+    name = full_name.strip().lower()
+    hint = parent_hint.strip().lower()
+    if hint:
+        if hint in known_domains:
+            remainder = name[: -len(hint)].rstrip(".")
+            if remainder:
+                return remainder, hint
+    labels = name.split(".")
+    for i in range(1, len(labels) - 1):
+        candidate = ".".join(labels[i:])
+        if candidate in known_domains:
+            return ".".join(labels[:i]), candidate
+    return None

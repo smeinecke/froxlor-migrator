@@ -145,6 +145,67 @@ class MigratorAccountOpsTests(unittest.TestCase):
         transferable = ops._ensure_mailboxes(1, mailboxes)
         self.assertEqual(["a@x"], transferable)
 
+    def test_ensure_dir_protections_rebuild_uses_target_login(self) -> None:
+        # Regression: after each add/update the dedup map is rebuilt; it must
+        # normalize target paths with the *target* login, otherwise renamed
+        # target customers get duplicate DirProtections.add calls.
+        from froxlor_migrator.migration.core import MigratorCore
+
+        target = StubTarget()
+        target._dir_protections = [
+            {"id": 1, "path": "/var/www/dstuser/web/secret", "username": "bob"},
+            {"id": 2, "path": "/var/www/dstuser/web/secret2", "username": "alice"},
+        ]
+        target.list_dir_protections = lambda customerid: target._dir_protections
+
+        ops = StubOps(target)
+        ops._relative_customer_path = lambda path, login: MigratorCore._relative_customer_path(ops, path, login)
+
+        ops._ensure_dir_protections(
+            1,
+            [
+                {"path": "/var/www/srcuser/web/secret", "username": "bob"},
+                {"path": "/var/www/srcuser/web/secret2", "username": "alice"},
+            ],
+            "srcuser",
+            "dstuser",
+        )
+
+        adds = [c for c, _ in target.calls if c == "DirProtections.add"]
+        updates = [c for c, _ in target.calls if c == "DirProtections.update"]
+        self.assertEqual([], adds)
+        self.assertEqual(2, len(updates))
+
+    def test_ensure_mailboxes_adds_missing_account_on_update(self) -> None:
+        # The source mailbox has a mail account; the existing target mailbox
+        # object does not. EmailAccounts.update would fail, so a missing
+        # account must be created instead.
+        target = StubTarget()
+        target._emails = [
+            {
+                "email": "a@x",
+                "popaccountid": 0,
+                "spam_tag_level": 7,
+                "rewrite_subject": 1,
+                "spam_kill_level": 14,
+                "bypass_spam": 0,
+                "policy_greylist": 1,
+                "iscatchall": 0,
+            }
+        ]
+        target.list_emails = lambda customerid: target._emails
+
+        ops = StubOps(target)
+        ops.config = SimpleNamespace(behavior=SimpleNamespace(mailbox_exists="update"))
+        ops._mailbox_address = lambda mailbox: mailbox.get("email")
+
+        transferable = ops._ensure_mailboxes(1, [{"email": "a@x", "popaccountid": 1}])
+
+        commands = [c for c, _ in target.calls]
+        self.assertIn("EmailAccounts.add", commands)
+        self.assertIn("EmailAccounts.update", commands)
+        self.assertEqual(["a@x"], transferable)
+
 
 if __name__ == "__main__":
     unittest.main()

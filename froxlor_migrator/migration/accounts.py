@@ -315,7 +315,7 @@ class MigratorAccountOps:
             refreshed = self.target.list_dir_protections(customerid=target_customer_id)
             existing = {
                 (
-                    self._relative_customer_path(str(pick(item, "path", default="")), customer_login).lower(),
+                    self._relative_customer_path(str(pick(item, "path", default="")), target_login).lower(),
                     str(pick(item, "username", default="")).strip().lower(),
                 ): item
                 for item in refreshed
@@ -354,11 +354,12 @@ class MigratorAccountOps:
         return as_int(marker, default=0) > 0
 
     def _ensure_mailboxes(self, target_customer_id: int, mailboxes: list[dict[str, Any]]) -> list[str]:
-        existing = {
-            str(pick(item, "email_full", "email", "emailaddr", default="")).strip().lower()
-            for item in self.target.list_emails(customerid=target_customer_id)
-            if str(pick(item, "email_full", "email", "emailaddr", default="")).strip()
-        }
+        existing_rows: dict[str, ResourceRow] = {}
+        for item in self.target.list_emails(customerid=target_customer_id):
+            address = str(pick(item, "email_full", "email", "emailaddr", default="")).strip().lower()
+            if address:
+                existing_rows[address] = item
+        existing = set(existing_rows)
         transferable: list[str] = []
 
         for mailbox_row in mailboxes:
@@ -368,6 +369,7 @@ class MigratorAccountOps:
             local, domain = mailbox.split("@", 1)
             email_payload = self._mailbox_payload(target_customer_id, mailbox_row)
             has_account = self._mailbox_has_account(mailbox_row)
+            target_has_account = False
 
             if mailbox in existing:
                 if self.config.behavior.mailbox_exists == "fail":
@@ -378,6 +380,7 @@ class MigratorAccountOps:
                     if has_account:
                         transferable.append(mailbox)
                     continue
+                target_has_account = self._mailbox_has_account(existing_rows[mailbox])
             else:
                 self.target.call(
                     "Emails.add",
@@ -394,21 +397,23 @@ class MigratorAccountOps:
                         "iscatchall": email_payload["iscatchall"],
                     },
                 )
-                if has_account:
-                    self.target.call(
-                        "EmailAccounts.add",
-                        {
-                            "emailaddr": mailbox,
-                            "customerid": target_customer_id,
-                            "email_password": random_password(24),
-                            "alternative_email": str(pick(mailbox_row, "alternative_email", default="")),
-                            "email_quota": as_int(pick(mailbox_row, "quota", default=0)),
-                            "sendinfomail": False,
-                        },
-                    )
+
+            if has_account and not target_has_account:
+                self.target.call(
+                    "EmailAccounts.add",
+                    {
+                        "emailaddr": mailbox,
+                        "customerid": target_customer_id,
+                        "email_password": random_password(24),
+                        "alternative_email": str(pick(mailbox_row, "alternative_email", default="")),
+                        "email_quota": as_int(pick(mailbox_row, "quota", default=0)),
+                        "sendinfomail": False,
+                    },
+                )
+                target_has_account = True
 
             self.target.call("Emails.update", email_payload)
-            if has_account:
+            if has_account and target_has_account:
                 self.target.call(
                     "EmailAccounts.update",
                     {

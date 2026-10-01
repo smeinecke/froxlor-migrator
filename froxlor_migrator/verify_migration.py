@@ -18,7 +18,7 @@ from .mysql_driver import query as mysql_query
 from .mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from .ssh_driver import SshDriver
 from .transfer import remote_sudo_prefix
-from .util import as_bool, as_int, pick
+from .util import as_bool, as_int, pick, resolve_subdomain_parts
 
 
 def _domain_name(row: dict[str, Any]) -> str:
@@ -844,8 +844,7 @@ def main() -> int:
                 customer_failed = True
 
         for domain in sorted(src_subdomains):
-            parent_domain = domain.split(".", 1)[1] if "." in domain else ""
-            if parent_domain and parent_domain not in migratable_domain_names:
+            if resolve_subdomain_parts(domain, "", migratable_domain_names) is None:
                 continue
             if domain not in dst_subdomains:
                 print(f"FAIL customer={login} subdomain={domain}: missing on target")

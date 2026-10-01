@@ -16,7 +16,7 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
 from .migrate import MigrationError, Migrator, Selection
 from .transfer import TransferError, TransferRunner
-from .util import as_int, parse_multi_select, pick, slugify
+from .util import as_int, parse_multi_select, pick, resolve_subdomain_parts, slugify
 
 console = Console()
 
@@ -820,7 +820,14 @@ def run_app() -> None:
 
     selected_domain_names = {str(pick(domain, "domain", "domainname", default="")).lower() for domain in selected_domains}
     selected_subdomains = [
-        item for item in subdomains if str(pick(item, "domain", "domainname", default="")).split(".", 1)[-1].lower() in selected_domain_names
+        item
+        for item in subdomains
+        if resolve_subdomain_parts(
+            str(pick(item, "domain", "domainname", default="")),
+            str(pick(item, "parentdomain", "maindomain", default="")),
+            selected_domain_names,
+        )
+        is not None
     ]
 
     if migrate_whole_customer:
@@ -882,7 +889,12 @@ def run_app() -> None:
             if not dbs:
                 console.print("[yellow]No databases found for this customer.[/yellow]")
 
-        mailbox_candidates = _mail_view(emails, selected_domain_names)
+        mailbox_domain_names = selected_domain_names | {
+            str(pick(row, "domain", "domainname", default="")).strip().lower()
+            for row in selected_subdomains
+            if str(pick(row, "domain", "domainname", default="")).strip()
+        }
+        mailbox_candidates = _mail_view(emails, mailbox_domain_names)
         if args.mailboxes is not None:
             try:
                 selected_mailbox_rows = _select_rows_by_tokens(

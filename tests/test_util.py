@@ -13,6 +13,7 @@ from froxlor_migrator.util import (
     parse_multi_select,
     pick,
     random_password,
+    resolve_subdomain_parts,
     slugify,
 )
 
@@ -64,6 +65,28 @@ class UtilTests(unittest.TestCase):
             result = ensure_dir(target)
             self.assertTrue(target.exists())
             self.assertEqual(target, result)
+
+    def test_resolve_subdomain_parts_simple(self) -> None:
+        result = resolve_subdomain_parts("sub.example.com", "", {"example.com"})
+        self.assertEqual(("sub", "example.com"), result)
+
+    def test_resolve_subdomain_parts_multi_level_uses_longest_known_suffix(self) -> None:
+        result = resolve_subdomain_parts("a.b.example.com", "", {"example.com"})
+        self.assertEqual(("a.b", "example.com"), result)
+
+    def test_resolve_subdomain_parts_prefers_known_hint(self) -> None:
+        result = resolve_subdomain_parts("a.b.example.com", "b.example.com", {"b.example.com"})
+        self.assertEqual(("a", "b.example.com"), result)
+
+    def test_resolve_subdomain_parts_hint_falls_back_to_suffix_walk(self) -> None:
+        # Froxlor may report the intermediate subdomain as parentdomain; when
+        # that is not a known main domain, the longest known suffix wins.
+        result = resolve_subdomain_parts("a.b.example.com", "b.example.com", {"example.com"})
+        self.assertEqual(("a.b", "example.com"), result)
+
+    def test_resolve_subdomain_parts_returns_none_when_no_parent(self) -> None:
+        self.assertIsNone(resolve_subdomain_parts("a.b.other.com", "", {"example.com"}))
+        self.assertIsNone(resolve_subdomain_parts("example.com", "", {"example.com"}))
 
 
 if __name__ == "__main__":

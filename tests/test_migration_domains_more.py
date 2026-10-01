@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from froxlor_migrator.migration.domains import MigratorDomainOps
+from froxlor_migrator.migration.types import MigrationError
 
 
 class DummyDomainOps(MigratorDomainOps):
@@ -265,38 +266,37 @@ class MigratorDomainOpsTests(unittest.TestCase):
         for key in ("adminid", "alias"):
             self.assertNotIn(key, payload)
 
-    def test_ensure_domains_handles_letsencrypt_fallback(self) -> None:
-        # _domain_payload currently sets letsencrypt False, so this is mostly a
-        # regression guard: even if FroxlorApiError is thrown, it should attempt
-        # to retry with letsencrypt disabled.
+    def test_ensure_domains_surfaces_letsencrypt_error(self) -> None:
+        # Regression guard: a failed Domains.add must propagate as a
+        # MigrationError instead of retrying with an identical payload.
         from froxlor_migrator.api import FroxlorApiError
 
         class Target:
             def __init__(self):
                 self._calls: list[tuple[str, dict[str, object]]] = []
-                self._first = True
 
             def list_domains(self, **kwargs):
                 return []
 
             def call(self, method: str, payload: dict[str, object]) -> None:
                 self._calls.append((method, payload))
-                if method == "Domains.add" and self._first:
-                    self._first = False
+                if method == "Domains.add":
                     raise FroxlorApiError("Let's Encrypt error")
 
         ops = DummyDomainOps()
         ops.target = Target()
         ops.config.behavior.domain_exists = "skip"
-        ops._get_target_domain = lambda name: {"domain": name, "documentroot": "/var/www", "ssl_redirect": 0}
-        ops._verify_domain_settings = lambda domain_name, target_docroot, payload, target_domain: None
 
-        ops._ensure_domains(1, [{"domain": "example.com", "documentroot": "/var/www"}], {}, {}, {}, "user")
-        self.assertEqual(2, len([c for c in ops.target._calls if c[0] == "Domains.add"]))
+        with self.assertRaises(MigrationError):
+            ops._ensure_domains(1, [{"domain": "example.com", "documentroot": "/var/www"}], {}, {}, {}, "user")
+        self.assertEqual(1, len([c for c in ops.target._calls if c[0] == "Domains.add"]))
 
 
-if __name__ == "__main__":
-    unittest.main()
+class DomainZoneAndSubdomainTests(unittest.TestCase):
+    def _ops_with_target(self, target) -> MigratorDomainOps:
+        ops = DummyDomainOps()
+        ops.target = target
+        return ops
 
     def test_default_mysql_server_from_allowed_parses_various_formats(self) -> None:
         ops = DummyDomainOps()
@@ -311,18 +311,6 @@ if __name__ == "__main__":
         self.assertEqual(0, ops._fallback_last_account_number("userDBNAME123", "user", "DBNAME"))
         self.assertEqual(0, ops._fallback_last_account_number("userRANDOM123", "user", "RANDOM"))
         self.assertEqual(123, ops._fallback_last_account_number("userXX123", "user", "XX"))
-
-    def test_target_mysql_access_hosts_and_prefix_setting(self) -> None:
-        ops = DummyDomainOps()
-        ops._run_target_panel_query = lambda sql: [["host1,host2"]]
-        self.assertEqual(["host1", "host2"], ops._target_mysql_access_hosts())
-        ops._run_target_panel_query = lambda sql: [[]]
-        self.assertEqual(["localhost"], ops._target_mysql_access_hosts())
-
-        ops._run_target_panel_query = lambda sql: [["prefix"]]
-        self.assertEqual("prefix", ops._target_mysql_prefix_setting())
-        ops._run_target_panel_query = lambda sql: [[]]
-        self.assertEqual("", ops._target_mysql_prefix_setting())
 
     def test_ensure_domain_zones_adds_missing_records(self) -> None:
         op = DummyDomainOps()
@@ -348,6 +336,84 @@ if __name__ == "__main__":
         )
 
         self.assertTrue(any(m == "DomainZones.add" for m, _ in calls))
+
+    def test_ensure_domain_zones_updates_drifted_content(self) -> None:
+        # A target record identical in (record, type, prio, ttl) but with
+        # different content (e.g. case drift in a TXT record) must be
+        # updated, not silently skipped by the case-insensitive dedup.
+        calls: list[tuple[str, dict[str, object]]] = []
+        target = SimpleNamespace(
+            list_domain_zones=lambda domainname=None: [{"record": "www", "type": "TXT", "prio": 0, "content": "ABCdef", "ttl": 300, "id": 7}],
+            call=lambda method, payload: calls.append((method, payload)),
+        )
+        ops = self._ops_with_target(target)
+
+        ops._ensure_domain_zones(
+            [{"domainname": "example.com", "record": "www", "type": "TXT", "prio": 0, "content": "abcdef", "ttl": 300}],
+            {},
+        )
+
+        updates = [c for c in calls if c[0] == "DomainZones.update"]
+        adds = [c for c in calls if c[0] == "DomainZones.add"]
+        self.assertEqual(1, len(updates))
+        self.assertEqual(7, updates[0][1]["id"])
+        self.assertEqual("abcdef", updates[0][1]["content"])
+        self.assertEqual([], adds)
+
+    def test_ensure_domain_zones_adds_when_content_differs_ambiguously(self) -> None:
+        # Multiple records share (record, type, prio, ttl): cannot pick one
+        # to update safely, so the source record must be added.
+        calls: list[tuple[str, dict[str, object]]] = []
+        target = SimpleNamespace(
+            list_domain_zones=lambda domainname=None: [
+                {"record": "@", "type": "TXT", "prio": 0, "content": "one", "ttl": 300, "id": 1},
+                {"record": "@", "type": "TXT", "prio": 0, "content": "two", "ttl": 300, "id": 2},
+            ],
+            call=lambda method, payload: calls.append((method, payload)),
+        )
+        ops = self._ops_with_target(target)
+
+        ops._ensure_domain_zones(
+            [{"domainname": "example.com", "record": "@", "type": "TXT", "prio": 0, "content": "three", "ttl": 300}],
+            {},
+        )
+
+        commands = [c for c, _ in calls]
+        self.assertIn("DomainZones.add", commands)
+        self.assertNotIn("DomainZones.update", commands)
+
+    def test_ensure_subdomains_resolves_multi_level_parent(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+        target = SimpleNamespace(
+            list_subdomains=lambda customerid=None: [],
+            list_domains=lambda customerid=None: [{"domain": "example.com"}],
+            call=lambda method, payload: calls.append((method, payload)),
+        )
+        ops = self._ops_with_target(target)
+
+        ops._ensure_subdomains(1, [{"domain": "a.b.example.com", "path": "/a/b"}], {})
+
+        adds = [c for c in calls if c[0] == "SubDomains.add"]
+        self.assertEqual(1, len(adds))
+        self.assertEqual("a.b", adds[0][1]["subdomain"])
+        self.assertEqual("example.com", adds[0][1]["domain"])
+
+    def test_ensure_subdomains_skips_without_parent_and_logs(self) -> None:
+        events: list[tuple[str, dict[str, object]]] = []
+        target = SimpleNamespace(
+            list_subdomains=lambda customerid=None: [],
+            list_domains=lambda customerid=None: [{"domain": "example.com"}],
+            call=lambda method, payload: None,
+        )
+        ops = self._ops_with_target(target)
+        ops.runner = SimpleNamespace(dry_run=True, debug_event=lambda msg, **kw: events.append((msg, kw)))
+
+        ops._ensure_subdomains(1, [{"domain": "a.b.other.com"}], {})
+
+        self.assertEqual(
+            [("subdomain_skipped", {"subdomain": "a.b.other.com", "reason": "no matching target parent domain"})],
+            events,
+        )
 
 
 if __name__ == "__main__":

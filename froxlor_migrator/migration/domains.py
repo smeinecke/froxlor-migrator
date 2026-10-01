@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
 from ..transfer import remote_sudo_prefix
-from ..util import as_int, pick, random_password
+from ..util import as_int, pick, random_password, resolve_subdomain_parts
 from .types import MigrationError, ResourceRow
 
 
@@ -281,7 +281,7 @@ class MigratorDomainOps:
             ("caneditdomain", int(bool(payload["caneditdomain"])), as_int(pick(target_domain, "caneditdomain", default=0))),
             ("isbinddomain", int(bool(payload["isbinddomain"])), as_int(pick(target_domain, "isbinddomain", default=0))),
             ("notryfiles", int(bool(payload["notryfiles"])), as_int(pick(target_domain, "notryfiles", default=0))),
-            ("hsts_maxage", as_int(payload["hsts_maxage"]), as_int(pick(target_domain, "hsts", default=0))),
+            ("hsts_maxage", as_int(payload["hsts_maxage"]), as_int(pick(target_domain, "hsts", "hsts_maxage", default=0))),
             ("hsts_sub", int(bool(payload["hsts_sub"])), as_int(pick(target_domain, "hsts_sub", default=0))),
             ("hsts_preload", int(bool(payload["hsts_preload"])), as_int(pick(target_domain, "hsts_preload", default=0))),
             ("http2", int(bool(payload["http2"])), as_int(pick(target_domain, "http2", default=0))),
@@ -360,11 +360,7 @@ class MigratorDomainOps:
                 try:
                     self.target.call("Domains.add", {"domain": domain_name, **base_payload})
                 except FroxlorApiError as exc:
-                    message = str(exc).lower()
-                    if "let's encrypt" in message or "letsencrypt" in message:
-                        self.target.call("Domains.add", {"domain": domain_name, **{**base_payload, "letsencrypt": False}})
-                    else:
-                        raise
+                    raise MigrationError(f"Could not create domain {domain_name} on target: {exc}") from exc
                 existing_domains.add(domain_name)
                 created = self._get_target_domain(domain_name)
                 if not created:
@@ -568,16 +564,12 @@ class MigratorDomainOps:
             if not full_name:
                 continue
 
-            parent_domain = str(pick(row, "parentdomain", "maindomain", default="")).strip().lower()
-            sub_part = str(pick(row, "subdomain", default="")).strip()
-            if not parent_domain and "." in full_name:
-                parts = full_name.split(".", 1)
-                sub_part = parts[0]
-                parent_domain = parts[1]
-            if not sub_part or not parent_domain:
-                raise MigrationError(f"Cannot resolve subdomain components for {full_name}")
-            if parent_domain not in target_domain_names:
+            parent_hint = str(pick(row, "parentdomain", "maindomain", default="")).strip().lower()
+            resolved = resolve_subdomain_parts(full_name, parent_hint, target_domain_names)
+            if resolved is None:
+                self.runner.debug_event("subdomain_skipped", subdomain=full_name, reason="no matching target parent domain")
                 continue
+            sub_part, parent_domain = resolved
 
             source_php_setting = as_int(pick(row, "phpsettingid", default=0))
             mapped_php_setting = php_setting_map.get(source_php_setting, 0)
@@ -659,11 +651,23 @@ class MigratorDomainOps:
                     str(pick(item, "record", default="")).strip().lower(),
                     str(pick(item, "type", default="")).strip().upper(),
                     as_int(pick(item, "prio", default=0)),
-                    str(pick(item, "content", default="")).strip().lower(),
+                    str(pick(item, "content", default="")).strip(),
                     as_int(pick(item, "ttl", default=18000)),
                 )
                 for item in target_rows
             }
+            # Records matching on (record, type, prio, ttl) but with different
+            # content are the "same" record with drifted data — update them
+            # rather than skipping or creating a duplicate.
+            near_matches: dict[tuple[str, str, int, int], list[dict[str, Any]]] = {}
+            for item in target_rows:
+                near_key = (
+                    str(pick(item, "record", default="")).strip().lower(),
+                    str(pick(item, "type", default="")).strip().upper(),
+                    as_int(pick(item, "prio", default=0)),
+                    as_int(pick(item, "ttl", default=18000)),
+                )
+                near_matches.setdefault(near_key, []).append(item)
             for row in rows:
                 if not self._is_custom_zone_record(row, domainname):
                     continue
@@ -671,24 +675,43 @@ class MigratorDomainOps:
                 content = str(pick(row, "content", default="")).strip()
                 if record_type in {"A", "AAAA"}:
                     content = self._replace_ip_tokens(content, ip_value_mapping)
+                record_name = str(pick(row, "record", default="")).strip().lower()
+                prio = as_int(pick(row, "prio", default=0))
+                ttl = as_int(pick(row, "ttl", default=18000))
                 key = (
-                    str(pick(row, "record", default="")).strip().lower(),
+                    record_name,
                     record_type,
-                    as_int(pick(row, "prio", default=0)),
-                    content.lower(),
-                    as_int(pick(row, "ttl", default=18000)),
+                    prio,
+                    content,
+                    ttl,
                 )
                 if key in existing:
+                    continue
+                candidates = near_matches.get((record_name, record_type, prio, ttl), [])
+                if len(candidates) == 1 and str(pick(candidates[0], "content", default="")).strip() != content:
+                    record_id = as_int(pick(candidates[0], "id", default=0))
+                    self.target.call(
+                        "DomainZones.update",
+                        {
+                            "id": record_id,
+                            "record": record_name,
+                            "type": record_type,
+                            "prio": prio,
+                            "content": content,
+                            "ttl": ttl,
+                        },
+                    )
+                    existing.add(key)
                     continue
                 self.target.call(
                     "DomainZones.add",
                     {
                         "domainname": domainname,
-                        "record": key[0],
-                        "type": key[1],
-                        "prio": key[2],
+                        "record": record_name,
+                        "type": record_type,
+                        "prio": prio,
                         "content": content,
-                        "ttl": key[4],
+                        "ttl": ttl,
                     },
                 )
                 existing.add(key)
