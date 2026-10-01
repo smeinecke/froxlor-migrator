@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import unittest
 from types import SimpleNamespace
 
@@ -56,6 +57,7 @@ class DummyMigrator(Migrator):
         self._ensure_dir_options = lambda *args, **kwargs: None
         self._ensure_dir_protections = lambda *args, **kwargs: None
         self._sync_target_mysql_prefix_setting = lambda: None
+        self._target_mysql_connect_kwargs = lambda: contextlib.nullcontext({})
         self._create_database_on_target = lambda target_customer_id, source_db, known_before: source_db.get("databasename", "")
         self._transfer_database_with_defaults = lambda *args, **kwargs: None
         self._sync_database_login_hashes = lambda *args, **kwargs: None

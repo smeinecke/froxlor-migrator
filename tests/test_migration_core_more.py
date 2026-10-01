@@ -193,7 +193,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertIn("UPDATE mail_users", getattr(self, "executed_mail_sql", ""))
 
     def test_sync_database_login_hashes_validates_plugins_and_hosts(self) -> None:
-        self.core._run_source_mysql_query = lambda sql, db: [["user", "mysql_native_password", "hash"]]
+        self.core._run_source_mysql_query = lambda sql, db: [["user", "localhost", "mysql_native_password", "hash"]]
         self.core._exec_target_mysql_sql = lambda sql, db: setattr(self, "executed_mysql_sql", sql)
         self.core._target_mysql_user_exists = lambda username, host: True
         self.core._target_mysql_access_hosts = lambda: ["web1", "10.0.0.%"]
@@ -206,12 +206,12 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertIn("'10.0.0.%'", getattr(self, "executed_mysql_sql", ""))
 
         # Support alternate auth plugin syntax
-        self.core._run_source_mysql_query = lambda sql, db: [["user", "caching_sha2_password", "hash"]]
+        self.core._run_source_mysql_query = lambda sql, db: [["user", "localhost", "caching_sha2_password", "hash"]]
         self.core._sync_database_login_hashes({"user": "user"})
         self.assertIn("IDENTIFIED VIA caching_sha2_password", getattr(self, "executed_mysql_sql", ""))
 
         # Unsupported plugin should raise
-        self.core._run_source_mysql_query = lambda sql, db: [["user", "bad-plugin", "hash"]]
+        self.core._run_source_mysql_query = lambda sql, db: [["user", "localhost", "bad-plugin", "hash"]]
         with self.assertRaises(MigrationError):
             self.core._sync_database_login_hashes({"user": "user"})
 
@@ -375,9 +375,9 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertEqual({"a@example.com": ("h1", "e1"), "b@example.com": ("h2", "e2")}, out)
 
     def test_load_source_database_user_hashes_parses_rows(self) -> None:
-        self.core._run_source_mysql_query = lambda sql, db: [["u", "mysql_native_password", "h"], ["v", "", ""]]
+        self.core._run_source_mysql_query = lambda sql, db: [["u", "localhost", "mysql_native_password", "h"], ["u", "%", "ed25519", "h2"], ["v", "", "", ""]]
         out = self.core._load_source_database_user_hashes(["u", "v"])
-        self.assertEqual({"u": ("mysql_native_password", "h"), "v": ("", "")}, out)
+        self.assertEqual({"u": {"localhost": ("mysql_native_password", "h"), "%": ("ed25519", "h2")}, "v": {"": ("", "")}}, out)
 
     def test_sync_customer_password_hash_updates_panel_customers(self) -> None:
         executed: list[str] = []

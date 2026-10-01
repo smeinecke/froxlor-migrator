@@ -91,24 +91,22 @@ def open_ssh_unix_socket_tunnel(config: AppConfig, remote_socket: str) -> Iterat
             raise RuntimeError("SSH command is empty; cannot open unix socket tunnel")
         if not config.ssh.strict_host_key_checking:
             cmd.extend(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
-        cmd.extend(
-            [
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=15",
-                "-N",
-                "-L",
-                f"{local_socket}:{remote_socket}",
-                "-p",
-                str(config.ssh.port),
-                "-l",
-                config.ssh.user,
-                config.ssh.host,
-            ]
-        )
+        cmd.extend([
+            "-o",
+            "ExitOnForwardFailure=yes",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=15",
+            "-N",
+            "-L",
+            f"{local_socket}:{remote_socket}",
+            "-p",
+            str(config.ssh.port),
+            "-l",
+            config.ssh.user,
+            config.ssh.host,
+        ])
 
         process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
         try:

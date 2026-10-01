@@ -80,6 +80,51 @@ class PanelDbFallbackTests(unittest.TestCase):
             self.assertNotIn("host", kwargs)
             self.assertNotIn("port", kwargs)
 
+    def test_target_mysql_connect_kwargs_does_not_hijack_remote_host_with_local_socket(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = _config()  # type: ignore[assignment]
+        migrator.runner = _RunnerStub()  # type: ignore[assignment]
+        migrator._target_sql_root = lambda: {  # type: ignore[method-assign]
+            "user": "root",
+            "password": "secret",
+            "host": "db.internal",
+            "port": "3306",
+        }
+        # A local socket exists on the SSH host — it must NOT override the
+        # configured remote DB host.
+        migrator._discover_remote_mysql_socket = lambda: "/var/run/mysqld/mysqld.sock"  # type: ignore[method-assign]
+
+        def _no_socket_tunnel(remote_socket):  # noqa: ANN001, ANN202
+            raise AssertionError("socket tunnel must not be opened for a remote DB host")
+
+        migrator._open_ssh_unix_socket_tunnel = _no_socket_tunnel  # type: ignore[method-assign]
+
+        @contextmanager
+        def _fake_tcp_tunnel(transport, remote_host, remote_port):  # noqa: ANN001, ANN002, ANN003
+            yield ("127.0.0.1", 40000)
+
+        migrator.runner = type("R", (), {"dry_run": False, "debug_event": lambda *a, **k: None, "ssh_transport": lambda self: object()})()  # type: ignore[assignment]
+        with unittest.mock.patch("froxlor_migrator.migration.core.open_ssh_tunnel", _fake_tcp_tunnel):
+            with migrator._target_mysql_connect_kwargs() as kwargs:
+                self.assertEqual("127.0.0.1", kwargs.get("host"))
+                self.assertEqual(40000, kwargs.get("port"))
+                self.assertNotIn("unix_socket", kwargs)
+
+    def test_target_mysql_connect_kwargs_raises_on_credential_failure(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = _config()  # type: ignore[assignment]
+        migrator.runner = _RunnerStub()  # type: ignore[assignment]
+
+        def _boom():  # noqa: ANN202
+            raise RuntimeError("no userdata found")
+
+        migrator._target_sql_root = _boom  # type: ignore[method-assign]
+
+        with self.assertRaises(MigrationError) as exc:
+            with migrator._target_mysql_connect_kwargs():
+                pass
+        self.assertIn("Could not resolve target MySQL credentials", str(exc.exception))
+
     def test_exec_target_panel_sql_does_not_use_remote_cli_fallback(self) -> None:
         migrator = object.__new__(Migrator)
         migrator.config = _config()  # type: ignore[assignment]

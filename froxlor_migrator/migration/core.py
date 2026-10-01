@@ -370,34 +370,33 @@ class MigratorCore:
                     self._close_target_mysql_tunnel()
             return
 
-        # If the migrator is mocked/stubbed in tests, it may not have _target_sql_root,
-        # or the target credentials may not be available. In that case, skip tunnel
-        # setup and yield an empty connect dict.
+        # Surface credential failures as a real error instead of silently
+        # connecting with defaults (which would produce a misleading pymysql
+        # error, or no fallback at all for the panel DB).
         try:
             creds = self._target_sql_root()
-        except Exception:
-            yield {}
-            return
-
-        try:
             kwargs = connect_kwargs_from_credentials(creds)
-        except Exception:
-            yield {}
-            return
+        except Exception as exc:
+            raise MigrationError(f"Could not resolve target MySQL credentials: {exc}") from exc
 
         socket_path = str(kwargs.get("unix_socket", "")).strip()
         if not socket_path:
-            discovered = self._discover_remote_mysql_socket()
-            if discovered:
-                socket_path = discovered
-                kwargs["unix_socket"] = discovered
-                kwargs.pop("host", None)
-                kwargs.pop("port", None)
-                self._debug(
-                    "discovered_target_mysql_socket",
-                    remote_socket=discovered,
-                    user=str(kwargs.get("user", "")),
-                )
+            # Only probe for a local socket when the credentials point at the
+            # SSH host itself — an explicit remote DB host must go through the
+            # TCP tunnel, otherwise we'd silently connect to the wrong server.
+            cred_host = str(kwargs.get("host", "")).strip().lower()
+            if cred_host in {"", "localhost", "127.0.0.1", "::1"}:
+                discovered = self._discover_remote_mysql_socket()
+                if discovered:
+                    socket_path = discovered
+                    kwargs["unix_socket"] = discovered
+                    kwargs.pop("host", None)
+                    kwargs.pop("port", None)
+                    self._debug(
+                        "discovered_target_mysql_socket",
+                        remote_socket=discovered,
+                        user=str(kwargs.get("user", "")),
+                    )
 
         stack = ExitStack()
         self._target_mysql_tunnel_stack = stack
@@ -594,7 +593,7 @@ class MigratorCore:
             dump_cmd = (
                 f"{shlex.quote(self.config.commands.mysqldump)} "
                 f"--defaults-extra-file={shlex.quote(str(source_defaults_path))} "
-                "--single-transaction --quick --skip-lock-tables "
+                "--single-transaction --quick --skip-lock-tables --routines --events "
                 f"{shlex.quote(source_db)} > {shlex.quote(str(dump_path))}"
             )
             self.runner.run(dump_cmd)
@@ -652,20 +651,22 @@ class MigratorCore:
             out[row[0].strip().lower()] = (row[1], row[2])
         return out
 
-    def _load_source_database_user_hashes(self, source_db_names: list[str]) -> dict[str, tuple[str, str]]:
+    def _load_source_database_user_hashes(self, source_db_names: list[str]) -> dict[str, dict[str, tuple[str, str]]]:
         db_users = [name.strip() for name in source_db_names if name.strip()]
         if not db_users:
             return {}
         user_literals = ", ".join(self._sql_utf8_literal(name) for name in sorted(set(db_users)))
         rows = self._run_source_mysql_query(
-            f"SELECT User, plugin, authentication_string FROM mysql.user WHERE User IN ({user_literals});",
+            f"SELECT User, Host, plugin, authentication_string FROM mysql.user WHERE User IN ({user_literals});",
             "mysql",
         )
-        out: dict[str, tuple[str, str]] = {}
+        # mysql.user is keyed on (Host, User) — keep auth per host so a user
+        # with different credentials per host does not get flattened.
+        out: dict[str, dict[str, tuple[str, str]]] = {}
         for row in rows:
-            if len(row) < 3:
+            if len(row) < 4:
                 continue
-            out[row[0].strip()] = (row[1], row[2])
+            out.setdefault(row[0].strip(), {})[row[1].strip()] = (row[2], row[3])
         return out
 
     def _sync_customer_password_hash(self, source_customer: dict[str, Any], target_customer_id: int) -> None:
@@ -771,16 +772,18 @@ class MigratorCore:
         source_hashes = self._load_source_database_user_hashes(list(source_to_target_db.keys()))
         statements: list[str] = []
         for source_db, target_db in source_to_target_db.items():
-            auth = source_hashes.get(source_db)
-            if not auth:
+            per_host = source_hashes.get(source_db)
+            if not per_host:
                 raise MigrationError(f"Source DB login hash missing in mysql.user for database user: {source_db}")
-            plugin, auth_hash = auth
-            if not auth_hash:
-                raise MigrationError(f"Source DB login hash empty for database user: {source_db}")
-            if not re.fullmatch(r"[A-Za-z0-9_]+", plugin):
-                raise MigrationError(f"Unsupported SQL auth plugin name for database user {source_db}: {plugin!r}")
             hosts = list(dict.fromkeys([*self._target_mysql_access_hosts(), "%", "localhost"]))
             for host in hosts:
+                # Prefer the same host's auth entry; fall back to localhost or
+                # any recorded host since per-host auth is usually identical.
+                plugin, auth_hash = per_host.get(host) or per_host.get("localhost") or next(iter(per_host.values()))
+                if not auth_hash:
+                    raise MigrationError(f"Source DB login hash empty for database user: {source_db}")
+                if not re.fullmatch(r"[A-Za-z0-9_]+", plugin):
+                    raise MigrationError(f"Unsupported SQL auth plugin name for database user {source_db}: {plugin!r}")
                 if plugin == "mysql_native_password":
                     statements.append(
                         "ALTER USER IF EXISTS "
