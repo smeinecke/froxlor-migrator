@@ -623,6 +623,15 @@ class MigratorCore:
                 pass
             self.runner.run_remote(f"rm -f {shlex.quote(remote_defaults)} {shlex.quote(remote_dump)}", check=False)
 
+    def _load_source_dkim_private_key(self, domain_name: str) -> str:
+        # Domains.listing/get strip dkim_privkey — it only exists in the panel DB.
+        rows = self._run_source_panel_query(
+            f"SELECT dkim_privkey FROM panel_domains WHERE domain={self._sql_utf8_literal(domain_name)} LIMIT 1;"
+        )
+        if not rows or not rows[0]:
+            return ""
+        return str(rows[0][0]).strip()
+
     def _sync_dkim_keys_db(self, domain_name: str, dkim_pubkey: str, dkim_privkey: str) -> None:
         update_sql = (
             "UPDATE panel_domains "

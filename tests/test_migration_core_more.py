@@ -361,6 +361,16 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.core._sync_dkim_keys_db("example.com", "pub", "priv")
         self.assertIn("dkim_pubkey", executed[0])
 
+    def test_load_source_dkim_private_key_queries_panel_db(self) -> None:
+        queries: list[str] = []
+        self.core._run_source_panel_query = lambda sql: queries.append(sql) or [["  priv-key  "]]
+        self.assertEqual("priv-key", self.core._load_source_dkim_private_key("example.com"))
+        self.assertIn("dkim_privkey", queries[0])
+        self.assertIn("panel_domains", queries[0])
+
+        self.core._run_source_panel_query = lambda sql: []
+        self.assertEqual("", self.core._load_source_dkim_private_key("missing.test"))
+
     def test_source_mysql_prefix_setting_returns_empty_and_value(self) -> None:
         self.core._run_source_panel_query = lambda sql: []
         self.assertEqual("", self.core._source_mysql_prefix_setting())
