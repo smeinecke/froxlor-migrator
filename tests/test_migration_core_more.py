@@ -19,7 +19,7 @@ class DummyRunner:
     def debug_event(self, message: str, **payload: object) -> None:
         self.debug_events.append((message, payload))
 
-    def run_remote(self, command: str, check: bool = True):
+    def run_remote(self, command: str, check: bool = True, sensitive: bool = False):
         self._run_remote_calls.append(command)
 
         class Result:
@@ -140,7 +140,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.runner.upload_file = lambda src, dest, mode=0o600: setattr(self, "uploaded", (src, dest))
         calls: list[str] = []
 
-        def run_remote(cmd: str, check: bool = True):
+        def run_remote(cmd: str, check: bool = True, sensitive: bool = False):
             calls.append(cmd)
             return type("R", (), {"stdout": "a\tb\n"})()
 
@@ -227,7 +227,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
     def test_discover_remote_mysql_socket_returns_first_candidate(self) -> None:
         calls: list[str] = []
 
-        def run_remote(command: str, check: bool = True):
+        def run_remote(command: str, check: bool = True, sensitive: bool = False):
             calls.append(command)
             return type("R", (), {"returncode": 0})()
 
@@ -237,7 +237,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertTrue(calls)
 
     def test_discover_remote_mysql_socket_returns_empty_when_none_found(self) -> None:
-        def run_remote(command: str, check: bool = True):
+        def run_remote(command: str, check: bool = True, sensitive: bool = False):
             return type("R", (), {"returncode": 1})()
 
         self.runner.run_remote = run_remote

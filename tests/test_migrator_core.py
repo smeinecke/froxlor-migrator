@@ -12,7 +12,7 @@ class StubRunner:
     def __init__(self) -> None:
         self.remote_calls: list[str] = []
 
-    def run_remote(self, command: str, check: bool = True):
+    def run_remote(self, command: str, check: bool = True, sensitive: bool = False):
         self.remote_calls.append(command)
 
         # mimic a successful remote check for known socket

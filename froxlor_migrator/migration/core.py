@@ -486,7 +486,7 @@ class MigratorCore:
                 f"{shlex.quote(database)} < {shlex.quote(remote_script)}"
             )
             self._debug("target_mysql_remote_cli_execute", database=database, command=cmd)
-            result = self.runner.run_remote(cmd)
+            result = self.runner.run_remote(cmd, sensitive=True)
             return result.stdout or ""
         finally:
             self.runner.run_remote(f"rm -f {shlex.quote(remote_defaults)} {shlex.quote(remote_script)}", check=False)

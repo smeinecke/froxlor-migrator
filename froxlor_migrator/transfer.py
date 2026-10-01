@@ -10,8 +10,6 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from cachetools import LRUCache, cached
-
 from .config import AppConfig
 from .ssh_driver import SshDriver
 from .util import ensure_dir
@@ -51,6 +49,7 @@ class TransferRunner:
         manifest_dir = ensure_dir(config.output.manifest_dir)
         self.manifest_path = manifest_dir / f"{manifest_name}.json"
         self.events: list[dict[str, Any]] = []
+        self._remote_file_cache: dict[str, str] = {}
 
     def _log_event(self, kind: str, payload: dict[str, Any]) -> None:
         self.events.append({
@@ -58,7 +57,10 @@ class TransferRunner:
             "kind": kind,
             **payload,
         })
-        self.manifest_path.write_text(json.dumps(self.events, indent=2), encoding="utf-8")
+        # Write-then-rename keeps the manifest valid even on a crash mid-write.
+        tmp_path = self.manifest_path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(self.events, indent=2), encoding="utf-8")
+        tmp_path.replace(self.manifest_path)
 
     def debug_event(self, message: str, **payload: Any) -> None:
         if not self.debug:
@@ -241,7 +243,7 @@ class TransferRunner:
         src = shlex.quote(source_dir)
         remote_tar = shlex.quote(self.config.commands.tar)
         remote_cmd = f"{sudo}mkdir -p {shlex.quote(target_dir)} && {remote_codec}{sudo}{remote_tar} -C {shlex.quote(target_dir)} -xpf -"
-        command = f"{tar} -C {src} -cvf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
+        command = f"{tar} -C {src} -cf - . {local_codec}| {ssh_prefix} {shlex.quote(remote_cmd)}"
         self.run(command)
 
     def _select_file_transfer_codec(self) -> tuple[str, str]:
@@ -288,17 +290,20 @@ class TransferRunner:
         doveadm = shlex.quote(self.config.commands.doveadm)
         ssh_prefix = self._ssh_prefix()
         remote_sudo = self.remote_sudo_prefix()
-        remote_inner = remote_sudo + self.config.commands.doveadm + " dsync-server -u " + shlex.quote(mailbox)
+        remote_inner = remote_sudo + shlex.quote(self.config.commands.doveadm) + " dsync-server -u " + shlex.quote(mailbox)
         remote = f"{ssh_prefix} {shlex.quote(remote_inner)}"
         command = f"{doveadm} backup -u {shlex.quote(mailbox)} {remote}"
         logger.debug("Mailbox transfer command prepared: mailbox=%s command=%s", mailbox, command)
         self.run(command)
 
-    @cached(LRUCache(maxsize=32))
     def read_remote_file(self, path: str) -> str:
         if self.dry_run:
             return ""
-        return self._ssh.read_file(path)
+        if path in self._remote_file_cache:
+            return self._remote_file_cache[path]
+        content = self._ssh.read_file(path)
+        self._remote_file_cache[path] = content
+        return content
 
     def run_remote(self, command: str, check: bool = True, sensitive: bool = False) -> CommandResult:
         started = datetime.now(timezone.utc).isoformat()
