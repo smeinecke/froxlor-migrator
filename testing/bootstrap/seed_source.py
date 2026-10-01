@@ -131,6 +131,21 @@ def _to_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _dump_data(row: dict[str, Any] | None) -> dict[str, Any]:
+    data = (row or {}).get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _relativize_dump_destdir(row: dict[str, Any] | None) -> str:
+    data = _dump_data(row)
+    destdir = str(data.get("destdir") or "").strip()
+    loginname = str(data.get("loginname") or "").strip()
+    marker = f"/{loginname.strip('/')}/"
+    if loginname and marker in destdir:
+        destdir = destdir.split(marker, 1)[1]
+    return destdir.strip("/")
+
+
 def ensure_customer(
     api: FroxlorApi,
     login: str,
@@ -795,12 +810,13 @@ def ensure_data_dump(
             return None
         raise
     for row in rows:
+        data = _dump_data(row)
         if (
-            str(_pick(row, "path", default="")).strip() == path
-            and _to_int(_pick(row, "dump_dbs", default=0)) == int(dump_dbs)
-            and _to_int(_pick(row, "dump_mail", default=0)) == int(dump_mail)
-            and _to_int(_pick(row, "dump_web", default=0)) == int(dump_web)
-            and str(_pick(row, "pgp_public_key", default="")).strip() == pgp_public_key.strip()
+            _relativize_dump_destdir(row) == path.strip("/")
+            and _to_int(data.get("dump_dbs", 0)) == int(dump_dbs)
+            and _to_int(data.get("dump_mail", 0)) == int(dump_mail)
+            and _to_int(data.get("dump_web", 0)) == int(dump_web)
+            and str(data.get("pgp_public_key") or "").strip() == pgp_public_key.strip()
         ):
             return row
     try:
@@ -824,7 +840,7 @@ def ensure_data_dump(
     except ApiError:
         return None
     for row in rows:
-        if str(_pick(row, "path", default="")).strip() == path:
+        if _relativize_dump_destdir(row) == path.strip("/"):
             return row
     return None
 
@@ -1461,11 +1477,13 @@ def main() -> None:
         },
         "data_dumps": [
             {
-                "path": str(_pick(data_dump_row or {}, "path", default="")),
-                "dump_dbs": _to_int(_pick(data_dump_row or {}, "dump_dbs", default=0)),
-                "dump_mail": _to_int(_pick(data_dump_row or {}, "dump_mail", default=0)),
-                "dump_web": _to_int(_pick(data_dump_row or {}, "dump_web", default=0)),
-                "pgp_public_key": str(_pick(data_dump_row or {}, "pgp_public_key", default="")),
+                # DataDump.listing nests the job config under `data`; store the
+                # docroot-relative destdir so verify can compare it back.
+                "path": _relativize_dump_destdir(data_dump_row),
+                "dump_dbs": _to_int(_pick(_dump_data(data_dump_row), "dump_dbs", default=0)),
+                "dump_mail": _to_int(_pick(_dump_data(data_dump_row), "dump_mail", default=0)),
+                "dump_web": _to_int(_pick(_dump_data(data_dump_row), "dump_web", default=0)),
+                "pgp_public_key": str(_pick(_dump_data(data_dump_row), "pgp_public_key", default="")),
             }
         ]
         if data_dump_row

@@ -663,20 +663,30 @@ def verify_data_dumps(client: FroxlorClient, expected_rows: list[dict[str, Any]]
     if not rows:
         print("  ! DataDump API returned no rows; skipping DataDump checks")
         return True
-    existing = {
-        (
-            str(pick(row, "path", default="")).strip(),
-            to_int(pick(row, "dump_dbs", default=0), 0),
-            to_int(pick(row, "dump_mail", default=0), 0),
-            to_int(pick(row, "dump_web", default=0), 0),
-            str(pick(row, "pgp_public_key", default="")).strip(),
+    # DataDump.listing returns panel_tasks rows; the dump configuration is the
+    # decoded JSON in `data` (destdir is absolute, relativize by the customer
+    # login dir marker for comparison with the docroot-relative input path).
+    existing = set()
+    for row in rows:
+        data = row.get("data") if isinstance(row.get("data"), dict) else {}
+        destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
+        loginname = str(data.get("loginname") or "").strip()
+        marker = f"/{loginname.strip('/')}/"
+        if loginname and marker in destdir:
+            destdir = destdir.split(marker, 1)[1]
+        existing.add(
+            (
+                destdir.strip("/"),
+                to_int(data.get("dump_dbs", pick(row, "dump_dbs", default=0)), 0),
+                to_int(data.get("dump_mail", pick(row, "dump_mail", default=0)), 0),
+                to_int(data.get("dump_web", pick(row, "dump_web", default=0)), 0),
+                str(data.get("pgp_public_key") if data.get("pgp_public_key") is not None else pick(row, "pgp_public_key", default="")).strip(),
+            )
         )
-        for row in rows
-    }
     all_ok = True
     for item in expected_rows:
         key = (
-            str(item.get("path", "")).strip(),
+            str(item.get("path", "")).strip().strip("/"),
             to_int(item.get("dump_dbs", 0), 0),
             to_int(item.get("dump_mail", 0), 0),
             to_int(item.get("dump_web", 0), 0),
