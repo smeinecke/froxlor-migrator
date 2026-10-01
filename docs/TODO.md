@@ -538,6 +538,21 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
   `sensitive=True`** — redaction now covers the result event's command
   field too.
 
+- [x] **Verify opened a fresh SSH session + tunnel per target panel
+  query** — `_target_panel_session` lazily shares one tunnel per run for
+  redirects/FTP hashes/customer secrets.
+
+- [x] **`preflight` `needs_ssh` missed the panel-DB writers** — redirect
+  sync (unconditional when domains are selected), sender-alias fallback,
+  and password/2FA/FTP-hash sync all need SSH; covered now.
+
+- [x] **`listing()` could loop forever** on endpoints ignoring
+  `sql_offset` — an identical full page now breaks pagination.
+
+- [x] **`pytest tests/test_integration_compose.py` standalone fails the
+  75% coverage gate** (code runs inside containers) — use
+  `make test-integration` (`--no-cov`) or the CI compose job.
+
 ### Still open / deferred
 
 - [ ] **N+1 listing refreshes** — every ensure-* re-lists target rows
