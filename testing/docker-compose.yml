@@ -1,7 +1,6 @@
 services:
   source-db:
     image: mariadb:11
-    container_name: froxlor-source-db
     restart: unless-stopped
     command: ["--skip-name-resolve=0"]
     environment:
@@ -19,7 +18,6 @@ services:
 
   target-db:
     image: mariadb:11
-    container_name: froxlor-target-db
     restart: unless-stopped
     command: ["--skip-name-resolve=0"]
     environment:
@@ -39,7 +37,6 @@ services:
     build:
       context: ./froxlor
       dockerfile: Dockerfile
-    container_name: froxlor-source
     restart: unless-stopped
     depends_on:
       - source-db
@@ -71,7 +68,6 @@ services:
     build:
       context: ./froxlor
       dockerfile: Dockerfile
-    container_name: froxlor-target
     restart: unless-stopped
     depends_on:
       - target-db
@@ -99,7 +95,6 @@ services:
 
   bootstrap:
     image: docker:27-cli
-    container_name: froxlor-bootstrap
     profiles: ["bootstrap"]
     working_dir: /workspace/testing
     environment:
