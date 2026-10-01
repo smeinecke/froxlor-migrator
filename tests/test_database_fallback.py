@@ -4,6 +4,7 @@ import unittest
 from types import SimpleNamespace
 
 from froxlor_migrator.migrate import Migrator
+from froxlor_migrator.migration.types import MigrationError
 
 
 class DatabaseFallbackTests(unittest.TestCase):
@@ -38,11 +39,56 @@ class DatabaseFallbackTests(unittest.TestCase):
         created = migrator._create_database_on_target(
             10,
             {"databasename": "cust_5", "description": "test db"},
-            set(),
+            {},
         )
 
         self.assertEqual("cust_5", created)
         self.assertEqual([(10, "cust_5", "test db")], recreate_calls)
+
+    def test_create_database_on_target_skip_policy_returns_none_for_own_db(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = SimpleNamespace(behavior=SimpleNamespace(database_exists="skip"))
+
+        created = migrator._create_database_on_target(
+            10,
+            {"databasename": "cust_5"},
+            {"cust_5": 10},
+        )
+        self.assertIsNone(created)
+
+    def test_create_database_on_target_update_policy_restores_own_db(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = SimpleNamespace(behavior=SimpleNamespace(database_exists="update"))
+
+        created = migrator._create_database_on_target(
+            10,
+            {"databasename": "cust_5"},
+            {"cust_5": 10},
+        )
+        self.assertEqual("cust_5", created)
+
+    def test_create_database_on_target_refuses_foreign_owned_db(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = SimpleNamespace(behavior=SimpleNamespace(database_exists="update"))
+        migrator._recreate_database_like_froxlor = lambda *a, **kw: self.fail("must not recreate foreign db")
+
+        with self.assertRaises(MigrationError):
+            migrator._create_database_on_target(
+                10,
+                {"databasename": "cust_5"},
+                {"cust_5": 99},
+            )
+
+    def test_create_database_on_target_fail_policy_raises_for_own_db(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.config = SimpleNamespace(behavior=SimpleNamespace(database_exists="fail"))
+
+        with self.assertRaises(MigrationError):
+            migrator._create_database_on_target(
+                10,
+                {"databasename": "cust_5"},
+                {"cust_5": 10},
+            )
 
     def test_recreate_database_uses_if_not_exists_for_idempotent_retries(self) -> None:
         migrator = object.__new__(Migrator)

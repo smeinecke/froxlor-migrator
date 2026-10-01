@@ -289,13 +289,19 @@ class MigratorCore:
     def _source_sql_root(self) -> dict[str, str]:
         if self._source_sql_root_credentials is not None:
             return self._source_sql_root_credentials
-        self._source_sql_root_credentials = load_local_sql_root_credentials(froxlor_userdata_paths())
+        try:
+            self._source_sql_root_credentials = load_local_sql_root_credentials(froxlor_userdata_paths())
+        except RuntimeError as exc:
+            raise MigrationError(str(exc)) from exc
         return self._source_sql_root_credentials
 
     def _source_sql(self) -> dict[str, str]:
         if self._source_sql_credentials is not None:
             return self._source_sql_credentials
-        self._source_sql_credentials = load_local_sql_credentials(froxlor_userdata_paths())
+        try:
+            self._source_sql_credentials = load_local_sql_credentials(froxlor_userdata_paths())
+        except RuntimeError as exc:
+            raise MigrationError(str(exc)) from exc
         return self._source_sql_credentials
 
     def _target_sql_root(self) -> dict[str, str]:
@@ -574,7 +580,7 @@ class MigratorCore:
                 output = self._run_target_mysql_via_remote_cli(sql, database)
                 rows: list[list[str]] = []
                 for line in output.splitlines():
-                    rows.append(line.split("\t"))
+                    rows.append(["" if cell == "NULL" else cell for cell in line.split("\t")])
                 self._debug("target_sql_query_fallback_remote_cli_success", database=database, rows=len(rows))
                 return rows
             except Exception as fallback_exc:
@@ -795,6 +801,14 @@ class MigratorCore:
         if statements:
             self._exec_target_panel_sql(" ".join(statements))
 
+    def _target_mysql_access_hosts(self) -> list[str]:
+        rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='system' AND varname='mysql_access_host' LIMIT 1;")
+        raw = str(rows[0][0] if rows and rows[0] else "").strip()
+        hosts = [item.strip() for item in raw.split(",") if item.strip()]
+        if not hosts:
+            return ["localhost"]
+        return hosts
+
     def _sync_database_login_hashes(self, source_to_target_db: dict[str, str]) -> None:
         if not source_to_target_db:
             return
@@ -809,7 +823,8 @@ class MigratorCore:
                 raise MigrationError(f"Source DB login hash empty for database user: {source_db}")
             if not re.fullmatch(r"[A-Za-z0-9_]+", plugin):
                 raise MigrationError(f"Unsupported SQL auth plugin name for database user {source_db}: {plugin!r}")
-            for host in ["%", "localhost", "target-db", "127.0.0.1", self.config.ssh.host]:
+            hosts = list(dict.fromkeys([*self._target_mysql_access_hosts(), "%", "localhost"]))
+            for host in hosts:
                 if plugin == "mysql_native_password":
                     statements.append(
                         "ALTER USER IF EXISTS "

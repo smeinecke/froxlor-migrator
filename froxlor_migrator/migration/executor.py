@@ -127,19 +127,22 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 self._sync_target_mysql_prefix_setting()
                 _advance("MySQL prefix synchronized")
 
-                known_before = {
-                    str(pick(item, "databasename", "dbname", "database", default=""))
+                known_databases = {
+                    str(pick(item, "databasename", "dbname", "database", default="")): as_int(pick(item, "customerid", default=0))
                     for item in self.target.list_mysqls()
                     if str(pick(item, "databasename", "dbname", "database", default=""))
                 }
                 for source_db in selection.databases:
                     source_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
-                    target_name = self._create_database_on_target(target_customer_id, source_db, known_before)
+                    target_name = self._create_database_on_target(target_customer_id, source_db, known_databases)
+                    if target_name is None:
+                        _advance(f"Database skipped (already exists): {source_name}")
+                        continue
                     if selection.validate_database_names and source_name != target_name:
                         raise MigrationError(
                             f"Database name mismatch: source={source_name!r} target={target_name!r}; preserving identical DB logins requires matching names"
                         )
-                    known_before.add(target_name)
+                    known_databases[target_name] = target_customer_id
                     db_map[source_name] = target_name
                     _status(f"Transferring database: {source_name}")
                     self._transfer_database_with_defaults(source_name, target_name)

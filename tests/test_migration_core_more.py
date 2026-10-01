@@ -196,9 +196,14 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.core._run_source_mysql_query = lambda sql, db: [["user", "mysql_native_password", "hash"]]
         self.core._exec_target_mysql_sql = lambda sql, db: setattr(self, "executed_mysql_sql", sql)
         self.core._target_mysql_user_exists = lambda username, host: True
+        self.core._target_mysql_access_hosts = lambda: ["web1", "10.0.0.%"]
 
         self.core._sync_database_login_hashes({"user": "user"})
         self.assertIn("ALTER USER", getattr(self, "executed_mysql_sql", ""))
+        # The configured mysql_access_host entries must be covered so users
+        # created for those hosts get the migrated password hash.
+        self.assertIn("'web1'", getattr(self, "executed_mysql_sql", ""))
+        self.assertIn("'10.0.0.%'", getattr(self, "executed_mysql_sql", ""))
 
         # Support alternate auth plugin syntax
         self.core._run_source_mysql_query = lambda sql, db: [["user", "caching_sha2_password", "hash"]]

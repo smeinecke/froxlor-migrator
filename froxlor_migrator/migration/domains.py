@@ -432,14 +432,22 @@ class MigratorDomainOps:
         self,
         target_customer_id: int,
         source_db: dict[str, Any],
-        known_before: set[str],
-    ) -> str:
+        known_databases: dict[str, int],
+    ) -> str | None:
         src_name = str(pick(source_db, "databasename", "dbname", "database", default=""))
         if not src_name:
             raise MigrationError("Source database has no name")
-        if src_name in known_before:
-            if self.config.behavior.database_exists == "fail":
+        owner = known_databases.get(src_name)
+        if owner is not None:
+            if owner != target_customer_id:
+                raise MigrationError(
+                    f"Target database {src_name!r} already exists and belongs to customer id {owner}; refusing to modify another customer's database"
+                )
+            policy = self.config.behavior.database_exists
+            if policy == "fail":
                 raise MigrationError(f"Target database already exists: {src_name}")
+            if policy == "skip":
+                return None
             return src_name
 
         description = str(pick(source_db, "description", default=f"Migrated from {src_name}"))
@@ -518,14 +526,6 @@ class MigratorDomainOps:
         if len(allowed) == 1 and allowed[0] != 0:
             return allowed[0]
         return allowed[0]
-
-    def _target_mysql_access_hosts(self) -> list[str]:
-        rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='system' AND varname='mysql_access_host' LIMIT 1;")
-        raw = str(rows[0][0] if rows and rows[0] else "").strip()
-        hosts = [item.strip() for item in raw.split(",") if item.strip()]
-        if not hosts:
-            return ["localhost"]
-        return hosts
 
     def _target_mysql_prefix_setting(self) -> str:
         rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='customer' AND varname='mysqlprefix' LIMIT 1;")
