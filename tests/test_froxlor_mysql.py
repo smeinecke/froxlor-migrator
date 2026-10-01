@@ -143,3 +143,18 @@ def test_load_local_sql_root_credentials_rereads_files(tmp_path, monkeypatch) ->
 
     assert creds1 == creds2
     assert len(read_calls) == 2
+
+
+def test_php_unescape_single_quoted_keeps_backslash_doublequote() -> None:
+    # PHP single-quoted strings only unescape \\ and \' — \" is literal text.
+    from froxlor_migrator.froxlor_mysql import _php_unescape
+
+    assert _php_unescape('a\\"b') == 'a\\"b'
+    assert _php_unescape("it\\'s") == "it's"
+
+
+def test_extract_sql_credentials_single_quoted_password_with_backslash_quote() -> None:
+    content = "$sql['user'] = 'u'; $sql['password'] = 'a\\\"b';"
+    creds = extract_sql_credentials(content)
+    assert creds is not None
+    assert creds["password"] == 'a\\"b'

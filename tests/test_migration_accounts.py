@@ -209,3 +209,54 @@ class MigratorAccountOpsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MailboxDuplicateRowTests(unittest.TestCase):
+    def test_duplicate_mailbox_rows_do_not_crash(self) -> None:
+        # The same mailbox appearing twice must not KeyError on the stale
+        # existing_rows map after the first add.
+        target = StubTarget()
+        target._emails = []
+
+        def list_emails(customerid: int):
+            return target._emails
+
+        def call(command: str, payload: dict[str, object]) -> None:
+            target.calls.append((command, payload))
+            if command == "Emails.add":
+                target._emails.append({
+                    "email": payload["email_part"] + "@" + payload["domain"],
+                    "popaccountid": 1,
+                    "spam_tag_level": payload["spam_tag_level"],
+                    "rewrite_subject": payload["rewrite_subject"],
+                    "spam_kill_level": payload["spam_kill_level"],
+                    "bypass_spam": payload["bypass_spam"],
+                    "policy_greylist": payload["policy_greylist"],
+                    "iscatchall": payload["iscatchall"],
+                })
+
+        target.list_emails = list_emails
+        target.call = call
+
+        ops = StubOps(target)
+        ops.config = SimpleNamespace(behavior=SimpleNamespace(mailbox_exists="update"))
+        ops._mailbox_address = lambda mailbox: mailbox.get("email")
+
+        row = {"email": "dup@x", "popaccountid": 1, "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14,
+               "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}
+        transferable = ops._ensure_mailboxes(1, [row, dict(row)])
+        self.assertEqual(["dup@x"], transferable)
+
+    def test_skip_policy_does_not_transfer_forward_only_target(self) -> None:
+        target = StubTarget()
+        target._emails = [{"email": "fwd@x", "popaccountid": 0}]
+        target.list_emails = lambda customerid: target._emails
+
+        ops = StubOps(target)
+        ops.config = SimpleNamespace(behavior=SimpleNamespace(mailbox_exists="skip"))
+        ops._mailbox_address = lambda mailbox: mailbox.get("email")
+
+        row = {"email": "fwd@x", "popaccountid": 1}
+        transferable = ops._ensure_mailboxes(1, [row])
+        self.assertEqual([], transferable)
+        self.assertEqual([], target.calls)

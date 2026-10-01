@@ -375,9 +375,10 @@ class MigratorAccountOps:
                 if self.config.behavior.mailbox_exists == "fail":
                     raise MigrationError(f"Target mailbox already exists: {mailbox}")
                 if self.config.behavior.mailbox_exists == "skip":
-                    # Existing mailbox objects are left untouched, but their
-                    # content may still be transferred.
-                    if has_account:
+                    # Existing mailbox objects are left untouched; only queue
+                    # content transfer when the target actually has a mailbox
+                    # account — dsync against a forward-only address fails.
+                    if has_account and self._mailbox_has_account(existing_rows[mailbox]):
                         transferable.append(mailbox)
                     continue
                 target_has_account = self._mailbox_has_account(existing_rows[mailbox])
@@ -436,7 +437,10 @@ class MigratorAccountOps:
                 raise MigrationError(f"Mailbox verification failed: could not reload {mailbox}")
             self._verify_mailbox_settings(mailbox, email_payload, target_mailbox)
 
-            if has_account:
+            if has_account and mailbox not in transferable:
                 transferable.append(mailbox)
             existing.add(mailbox)
+            # Keep the row map fresh so a duplicate mailbox entry later in the
+            # same selection sees the target-side account state we just wrote.
+            existing_rows[mailbox] = target_mailbox
         return transferable

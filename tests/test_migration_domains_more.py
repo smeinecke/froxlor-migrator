@@ -418,3 +418,24 @@ class DomainZoneAndSubdomainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CertificateMigrationTests(unittest.TestCase):
+    def test_existing_certificate_update_passes_cert_id(self) -> None:
+        ops = DummyDomainOps()
+        calls: list[tuple[str, dict]] = []
+        certs = [{"domainname": "ex.com", "id": 55, "ssl_cert_file": "CERT", "ssl_key_file": "KEY"}]
+
+        def listing(command: str):
+            if command == "Certificates.listing":
+                return certs
+            return []
+
+        ops.source = SimpleNamespace(listing=listing)
+        ops.target = SimpleNamespace(
+            listing=listing,
+            call=lambda method, payload=None: calls.append((method, payload or {})),
+        )
+        ops._migrate_domain_certificates([{"domain": "ex.com", "letsencrypt": 0}])
+        self.assertIn(("Certificates.update", {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY",
+                                               "ssl_ca_file": "", "ssl_cert_chainfile": "", "id": 55}), calls)

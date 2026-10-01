@@ -109,7 +109,8 @@ class MigratorDomainOps:
 
             existing_target_cert = target_by_domain.get(domain_name)
             if existing_target_cert:
-                self.target.call("Certificates.update", cert_payload)
+                cert_id = as_int(pick(existing_target_cert, "id", default=0))
+                self.target.call("Certificates.update", {**cert_payload, "id": cert_id})
             else:
                 self.target.call("Certificates.add", cert_payload)
 

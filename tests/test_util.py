@@ -91,3 +91,13 @@ class UtilTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResolveSubdomainPartsHintMismatchTests(unittest.TestCase):
+    def test_hint_in_known_domains_but_not_a_suffix_of_name(self) -> None:
+        # The hint must be an actual suffix of the subdomain name; a stale or
+        # inconsistent parentdomain field must not produce a garbage label.
+        self.assertIsNone(resolve_subdomain_parts("sub.other.com", "example.com", {"example.com"}))
+
+    def test_hint_matches_name_exactly_returns_none(self) -> None:
+        self.assertIsNone(resolve_subdomain_parts("example.com", "example.com", {"example.com"}))

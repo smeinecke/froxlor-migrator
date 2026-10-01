@@ -30,6 +30,10 @@ def _php_unescape(value: str, double_quoted: bool = False) -> str:
     escapes = {"\\": "\\", "'": "'", '"': '"'}
     if double_quoted:
         escapes.update({"n": "\n", "r": "\r", "t": "\t", "v": "\v", "f": "\f", "e": "\x1b", "$": "$"})
+    else:
+        # Single-quoted PHP strings only recognise \\ and \' — a \" sequence
+        # inside single quotes is a literal backslash followed by a quote.
+        escapes.pop('"', None)
     out: list[str] = []
     i = 0
     while i < len(value):

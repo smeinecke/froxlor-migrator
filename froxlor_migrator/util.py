@@ -87,11 +87,10 @@ def resolve_subdomain_parts(
     """
     name = full_name.strip().lower()
     hint = parent_hint.strip().lower()
-    if hint:
-        if hint in known_domains:
-            remainder = name[: -len(hint)].rstrip(".")
-            if remainder:
-                return remainder, hint
+    if hint and hint in known_domains and name.endswith(f".{hint}"):
+        remainder = name[: -len(hint)].rstrip(".")
+        if remainder:
+            return remainder, hint
     labels = name.split(".")
     for i in range(1, len(labels) - 1):
         candidate = ".".join(labels[i:])
