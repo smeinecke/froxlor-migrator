@@ -437,5 +437,10 @@ class CertificateMigrationTests(unittest.TestCase):
             call=lambda method, payload=None: calls.append((method, payload or {})),
         )
         ops._migrate_domain_certificates([{"domain": "ex.com", "letsencrypt": 0}])
-        self.assertIn(("Certificates.update", {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY",
-                                               "ssl_ca_file": "", "ssl_cert_chainfile": "", "id": 55}), calls)
+        self.assertIn(
+            (
+                "Certificates.update",
+                {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY", "ssl_ca_file": "", "ssl_cert_chainfile": "", "id": 55},
+            ),
+            calls,
+        )

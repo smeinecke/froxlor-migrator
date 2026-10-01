@@ -292,7 +292,16 @@ class FroxlorClient:
                     raise
                 logger.warning("EmailSender.listing failed for mailbox %s: %s", mailbox_email, exc)
                 chunk = []
-            rows.extend(chunk)
+            for item in chunk:
+                allowed_sender = str(item.get("allowed_sender") or item.get("sender") or "").strip().lower()
+                if not allowed_sender:
+                    continue
+                rows.append({
+                    **item,
+                    "emailaddr": str(item.get("emailaddr") or item.get("email") or mailbox_email).strip().lower(),
+                    "email": str(item.get("email") or item.get("emailaddr") or mailbox_email).strip().lower(),
+                    "allowed_sender": allowed_sender,
+                })
         return self._filter_customer_rows(rows, customerid, loginname)
 
     def list_domain_zones(

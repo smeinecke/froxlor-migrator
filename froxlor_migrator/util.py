@@ -97,3 +97,29 @@ def resolve_subdomain_parts(
         if candidate in known_domains:
             return ".".join(labels[:i]), candidate
     return None
+
+
+def is_custom_zone_record(row: dict[str, Any], domainname: str = "") -> bool:
+    """True when a zone row is a user-managed record (not a Froxlor default).
+
+    Apex SOA and apex NS records are auto-managed by the panel; everything
+    else (including delegated sub-zone NS records) is custom.
+    """
+    for flag in (
+        "is_default",
+        "isdefault",
+        "is_default_record",
+        "isfroxlordefault",
+        "default_entry",
+    ):
+        if as_int(pick(row, flag, default=0)) == 1:
+            return False
+    record_type = str(pick(row, "type", default="")).upper()
+    if record_type == "SOA":
+        return False
+    if record_type == "NS":
+        record_name = str(pick(row, "record", default="")).strip().lower().rstrip(".")
+        apex = domainname.strip().lower().rstrip(".")
+        if record_name in {"", "@"} or (apex and record_name == apex):
+            return False
+    return True

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
 from ..transfer import remote_sudo_prefix
-from ..util import as_int, pick, random_password, resolve_subdomain_parts
+from ..util import as_int, is_custom_zone_record, pick, random_password, resolve_subdomain_parts
 from .types import MigrationError, ResourceRow
 
 
@@ -614,26 +614,7 @@ class MigratorDomainOps:
             target_by_name = {str(pick(item, "domain", "domainname", default="")).strip().lower(): item for item in refreshed}
 
     def _is_custom_zone_record(self, row: dict[str, Any], domainname: str = "") -> bool:
-        for flag in (
-            "is_default",
-            "isdefault",
-            "is_default_record",
-            "isfroxlordefault",
-            "default_entry",
-        ):
-            if as_int(pick(row, flag, default=0)) == 1:
-                return False
-        record_type = str(pick(row, "type", default="")).upper()
-        if record_type == "SOA":
-            return False
-        if record_type == "NS":
-            # Only the apex NS records are auto-managed; NS records for
-            # delegated sub-zones are custom and must be migrated.
-            record_name = str(pick(row, "record", default="")).strip().lower().rstrip(".")
-            apex = domainname.strip().lower().rstrip(".")
-            if record_name in {"", "@"} or (apex and record_name == apex):
-                return False
-        return True
+        return is_custom_zone_record(row, domainname)
 
     def _ensure_domain_zones(self, domain_zones: list[dict[str, Any]], ip_value_mapping: dict[str, str]) -> None:
         if not domain_zones:

@@ -18,7 +18,7 @@ from .mysql_driver import query as mysql_query
 from .mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from .ssh_driver import SshDriver
 from .transfer import remote_sudo_prefix
-from .util import as_bool, as_int, pick, resolve_subdomain_parts
+from .util import as_bool, as_int, is_custom_zone_record, pick, resolve_subdomain_parts
 
 
 def _domain_name(row: dict[str, Any]) -> str:
@@ -551,29 +551,6 @@ def _compare_dir_option(source_row: dict[str, Any], target_row: dict[str, Any]) 
     return errors
 
 
-def _is_custom_zone_record(row: dict[str, Any], domainname: str = "") -> bool:
-    for flag in (
-        "is_default",
-        "isdefault",
-        "is_default_record",
-        "isfroxlordefault",
-        "default_entry",
-    ):
-        if as_int(pick(row, flag, default=0)) == 1:
-            return False
-    record_type = str(pick(row, "type", default="")).upper()
-    if record_type == "SOA":
-        return False
-    if record_type == "NS":
-        # Only the apex NS records are auto-managed; NS records for delegated
-        # sub-zones are custom and must be migrated/verified.
-        record_name = str(pick(row, "record", default="")).strip().lower().rstrip(".")
-        apex = domainname.strip().lower().rstrip(".")
-        if record_name in {"", "@"} or (apex and record_name == apex):
-            return False
-    return True
-
-
 def _run_mysql_query_local(connect_kwargs: dict[str, Any], database: str, sql: str) -> list[list[str]]:
     return mysql_query(connect_kwargs, database, sql)
 
@@ -906,7 +883,7 @@ def main() -> int:
                         as_int(pick(item, "ttl", default=18000)),
                     )
                     for item in src_zone_rows
-                    if _is_custom_zone_record(item, domain)
+                    if is_custom_zone_record(item, domain)
                 }
                 dst_zones = {
                     (
@@ -917,7 +894,7 @@ def main() -> int:
                         as_int(pick(item, "ttl", default=18000)),
                     )
                     for item in dst_zone_rows
-                    if _is_custom_zone_record(item, domain)
+                    if is_custom_zone_record(item, domain)
                 }
                 missing_zones = sorted(src_zones - dst_zones)
                 for zone in missing_zones:

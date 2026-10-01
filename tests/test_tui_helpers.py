@@ -221,3 +221,21 @@ class TuiHelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SshKeyFtpFilterTests(unittest.TestCase):
+    def test_filter_ssh_keys_for_ftps_drops_unselected_ftp_users(self) -> None:
+        from froxlor_migrator.tui import _filter_ssh_keys_for_ftps
+
+        ssh_keys = [
+            {"username": "web1", "ssh_pubkey": "key-a"},
+            {"username": "web2", "ssh_pubkey": "key-b"},
+        ]
+        ftps = [{"username": "web1"}]
+        result = _filter_ssh_keys_for_ftps(ssh_keys, ftps)
+        self.assertEqual([{"username": "web1", "ssh_pubkey": "key-a"}], result)
+
+    def test_filter_ssh_keys_empty_ftps_drops_all(self) -> None:
+        from froxlor_migrator.tui import _filter_ssh_keys_for_ftps
+
+        self.assertEqual([], _filter_ssh_keys_for_ftps([{"username": "web1"}], []))

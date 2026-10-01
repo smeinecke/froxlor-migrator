@@ -7,7 +7,7 @@ from froxlor_migrator.migration.types import Selection
 from froxlor_migrator.verify_migration import (
     _compare_dir_option,
     _compare_dir_protection,
-    _is_custom_zone_record,
+    is_custom_zone_record,
 )
 
 
@@ -25,7 +25,7 @@ class HelperParityTests(unittest.TestCase):
         for row, expected in rows:
             with self.subTest(row=row):
                 self.assertEqual(expected, migrator._is_custom_zone_record(row))
-                self.assertEqual(expected, _is_custom_zone_record(row))
+                self.assertEqual(expected, is_custom_zone_record(row))
 
     def test_compare_dir_protection_detects_password_mismatch(self) -> None:
         errs = _compare_dir_protection(

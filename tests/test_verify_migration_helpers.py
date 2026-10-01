@@ -17,13 +17,13 @@ from froxlor_migrator.verify_migration import (
     _expected_ftp_path,
     _expected_target_docroot,
     _ftp_name,
-    _is_custom_zone_record,
     _mail_name,
     _normalize_customer_map,
     _normalize_php_setting_map,
     _ssh_key_name,
     _subdomain_name,
     _target_connect_kwargs_via_ssh,
+    is_custom_zone_record,
 )
 
 
@@ -159,15 +159,15 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
     def test_is_custom_zone_record_keeps_delegated_ns(self) -> None:
         # Apex NS and SOA are Froxlor-managed; delegated sub-zone NS records
         # are custom and must be verified.
-        self.assertFalse(_is_custom_zone_record({"record": "example.com", "type": "NS"}, "example.com"))
-        self.assertFalse(_is_custom_zone_record({"record": "@", "type": "NS"}, "example.com"))
-        self.assertFalse(_is_custom_zone_record({"record": "", "type": "NS"}, "example.com"))
-        self.assertFalse(_is_custom_zone_record({"record": "sub", "type": "SOA"}, "example.com"))
-        self.assertTrue(_is_custom_zone_record({"record": "sub", "type": "NS"}, "example.com"))
-        self.assertTrue(_is_custom_zone_record({"record": "sub.example.com", "type": "NS"}, "example.com"))
-        self.assertTrue(_is_custom_zone_record({"record": "www", "type": "A"}, "example.com"))
+        self.assertFalse(is_custom_zone_record({"record": "example.com", "type": "NS"}, "example.com"))
+        self.assertFalse(is_custom_zone_record({"record": "@", "type": "NS"}, "example.com"))
+        self.assertFalse(is_custom_zone_record({"record": "", "type": "NS"}, "example.com"))
+        self.assertFalse(is_custom_zone_record({"record": "sub", "type": "SOA"}, "example.com"))
+        self.assertTrue(is_custom_zone_record({"record": "sub", "type": "NS"}, "example.com"))
+        self.assertTrue(is_custom_zone_record({"record": "sub.example.com", "type": "NS"}, "example.com"))
+        self.assertTrue(is_custom_zone_record({"record": "www", "type": "A"}, "example.com"))
         # Records flagged as defaults are excluded regardless of type.
-        self.assertFalse(_is_custom_zone_record({"record": "sub", "type": "NS", "is_default": 1}, "example.com"))
+        self.assertFalse(is_custom_zone_record({"record": "sub", "type": "NS", "is_default": 1}, "example.com"))
 
     def test_customer_warnings_report_not_fail_for_add_only_fields(self) -> None:
         # deactivated/theme are stripped from Customers.add, so mismatches are

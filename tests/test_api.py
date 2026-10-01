@@ -422,3 +422,26 @@ class ApiClientTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EmailSenderNormalizationTests(unittest.TestCase):
+    def test_per_mailbox_sender_rows_get_email_injected(self) -> None:
+        client = StubClient()
+        client.queue(
+            {"list": [{"email_full": "a@example.com", "customerid": 1}]},
+            {"list": [{"allowed_sender": "other@example.com"}]},  # no email keys
+        )
+
+        rows = client.list_email_senders(customerid=1)
+        self.assertEqual(1, len(rows))
+        self.assertEqual("a@example.com", rows[0]["email"])
+        self.assertEqual("a@example.com", rows[0]["emailaddr"])
+        self.assertEqual("other@example.com", rows[0]["allowed_sender"])
+
+    def test_sender_rows_without_allowed_sender_are_dropped(self) -> None:
+        client = StubClient()
+        client.queue(
+            {"list": [{"email_full": "a@example.com", "customerid": 1}]},
+            {"list": [{"id": 5}]},
+        )
+        self.assertEqual([], client.list_email_senders(customerid=1))

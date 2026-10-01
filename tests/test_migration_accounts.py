@@ -242,8 +242,16 @@ class MailboxDuplicateRowTests(unittest.TestCase):
         ops.config = SimpleNamespace(behavior=SimpleNamespace(mailbox_exists="update"))
         ops._mailbox_address = lambda mailbox: mailbox.get("email")
 
-        row = {"email": "dup@x", "popaccountid": 1, "spam_tag_level": 7, "rewrite_subject": 1, "spam_kill_level": 14,
-               "bypass_spam": 0, "policy_greylist": 1, "iscatchall": 0}
+        row = {
+            "email": "dup@x",
+            "popaccountid": 1,
+            "spam_tag_level": 7,
+            "rewrite_subject": 1,
+            "spam_kill_level": 14,
+            "bypass_spam": 0,
+            "policy_greylist": 1,
+            "iscatchall": 0,
+        }
         transferable = ops._ensure_mailboxes(1, [row, dict(row)])
         self.assertEqual(["dup@x"], transferable)
 
