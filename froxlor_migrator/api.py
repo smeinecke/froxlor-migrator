@@ -207,6 +207,19 @@ class FroxlorClient:
             logger.warning("DataDump.listing failed; data dumps will not be migrated: %s", exc)
             return []
 
+    def _forwarder_rows_from_payload(self, payload: Any, mailbox_email: str) -> list[dict[str, Any]]:
+        """Normalize EmailForwarders.listing rows: lowercase destinations,
+        drop empty/self-referencing rows, and stamp the owning mailbox."""
+        rows: list[dict[str, Any]] = []
+        mailbox_lower = mailbox_email.lower()
+        for item in self._rows_from_payload(payload):
+            destination = str(item.get("destination") or item.get("address") or "").strip().lower()
+            if not destination or (mailbox_lower and destination == mailbox_lower):
+                continue
+            owner = mailbox_lower or str(item.get("email") or item.get("emailaddr") or "").strip().lower()
+            rows.append({**item, "emailaddr": owner, "email": owner, "destination": destination})
+        return rows
+
     def list_email_forwarders(
         self,
         customerid: int | None = None,
@@ -222,25 +235,13 @@ class FroxlorClient:
             if email_id:
                 params["id"] = email_id
             try:
-                raw_rows = self._rows_from_payload(self.call("EmailForwarders.listing", params))
+                payload = self.call("EmailForwarders.listing", params)
             except FroxlorApiError as exc:
                 if strict:
                     raise
                 logger.warning("EmailForwarders.listing failed for %s: %s", emailaddr or email_id, exc)
                 return []
-            mailbox_email = (emailaddr or "").strip().lower()
-            filtered_rows: list[dict[str, Any]] = []
-            for item in raw_rows:
-                destination = str(item.get("destination") or item.get("address") or "").strip().lower()
-                if not destination or (mailbox_email and destination == mailbox_email):
-                    continue
-                filtered_rows.append({
-                    **item,
-                    "emailaddr": mailbox_email or str(item.get("email") or item.get("emailaddr") or "").strip().lower(),
-                    "email": mailbox_email or str(item.get("email") or item.get("emailaddr") or "").strip().lower(),
-                    "destination": destination,
-                })
-            return filtered_rows
+            return self._forwarder_rows_from_payload(payload, (emailaddr or "").strip().lower())
 
         rows: list[dict[str, Any]] = []
         for mailbox in self.list_emails(customerid=customerid, loginname=loginname):
@@ -248,23 +249,30 @@ class FroxlorClient:
             if not mailbox_email:
                 continue
             try:
-                chunk = self._rows_from_payload(self.call("EmailForwarders.listing", {"emailaddr": mailbox_email}))
+                payload = self.call("EmailForwarders.listing", {"emailaddr": mailbox_email})
             except FroxlorApiError as exc:
                 if strict:
                     raise
                 logger.warning("EmailForwarders.listing failed for mailbox %s: %s", mailbox_email, exc)
-                chunk = []
-            for item in chunk:
-                destination = str(item.get("destination") or item.get("address") or "").strip().lower()
-                if not destination or destination == mailbox_email.lower():
-                    continue
-                rows.append({
-                    **item,
-                    "emailaddr": mailbox_email.lower(),
-                    "email": mailbox_email.lower(),
-                    "destination": destination,
-                })
+                continue
+            rows.extend(self._forwarder_rows_from_payload(payload, mailbox_email))
         return self._filter_customer_rows(rows, customerid, loginname)
+
+    def _sender_rows_from_payload(self, payload: Any, mailbox_email: str) -> list[dict[str, Any]]:
+        """Normalize EmailSender.listing rows: lowercase the allowed sender,
+        drop empty rows, and stamp the owning mailbox."""
+        rows: list[dict[str, Any]] = []
+        for item in self._rows_from_payload(payload):
+            allowed_sender = str(item.get("allowed_sender") or item.get("sender") or "").strip().lower()
+            if not allowed_sender:
+                continue
+            rows.append({
+                **item,
+                "emailaddr": str(item.get("emailaddr") or item.get("email") or mailbox_email).strip().lower(),
+                "email": str(item.get("email") or item.get("emailaddr") or mailbox_email).strip().lower(),
+                "allowed_sender": allowed_sender,
+            })
+        return rows
 
     def list_email_senders(
         self,
@@ -294,22 +302,13 @@ class FroxlorClient:
             if not mailbox_email:
                 continue
             try:
-                chunk = self._rows_from_payload(self.call("EmailSender.listing", {"emailaddr": mailbox_email}))
+                payload = self.call("EmailSender.listing", {"emailaddr": mailbox_email})
             except FroxlorApiError as exc:
                 if strict:
                     raise
                 logger.warning("EmailSender.listing failed for mailbox %s: %s", mailbox_email, exc)
-                chunk = []
-            for item in chunk:
-                allowed_sender = str(item.get("allowed_sender") or item.get("sender") or "").strip().lower()
-                if not allowed_sender:
-                    continue
-                rows.append({
-                    **item,
-                    "emailaddr": str(item.get("emailaddr") or item.get("email") or mailbox_email).strip().lower(),
-                    "email": str(item.get("email") or item.get("emailaddr") or mailbox_email).strip().lower(),
-                    "allowed_sender": allowed_sender,
-                })
+                continue
+            rows.extend(self._sender_rows_from_payload(payload, mailbox_email))
         return self._filter_customer_rows(rows, customerid, loginname)
 
     def list_domain_zones(
