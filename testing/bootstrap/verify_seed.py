@@ -591,10 +591,18 @@ def verify_ssh_keys(client: FroxlorClient, expected_rows: list[dict[str, Any]]) 
         return False
 
 
-def verify_customer_security(client: FroxlorClient, expected_rows: dict[str, Any]) -> bool:
+def verify_customer_security(client: FroxlorClient, expected_rows: dict[str, Any], file_env: dict[str, str]) -> bool:
     print("Verifying customer 2FA settings...")
     if not expected_rows:
         return True
+    # Froxlor >= 2.x strips data_2fa from Customers.listing responses (TOTP
+    # secrets are never exposed via API), so type_2fa is checked via the API
+    # and data_2fa directly in the panel database.
+    db_host = env_value("SOURCE_MYSQL_HOST", file_env, "127.0.0.1")
+    db_port = env_value("SOURCE_MYSQL_PORT", file_env, env_value("SOURCE_DB_PORT", file_env, "33061"))
+    db_user = env_value("SOURCE_DB_ROOT_USER", file_env, "root")
+    db_pass = env_value("SOURCE_DB_ROOT_PASSWORD", file_env, "source-root")
+    db_name = env_value("SOURCE_DB_NAME", file_env, "froxlor")
     try:
         rows = client.list_customers()
         by_login = {str(pick(row, "loginname", "login", default="")).strip().lower(): row for row in rows}
@@ -608,9 +616,32 @@ def verify_customer_security(client: FroxlorClient, expected_rows: dict[str, Any
             expected_type = to_int(item.get("type_2fa", 0), 0)
             expected_data = str(item.get("data_2fa", "")).strip()
             got_type = to_int(pick(row, "type_2fa", default=0), 0)
-            got_data = str(pick(row, "data_2fa", default="")).strip()
-            if expected_type != got_type or expected_data != got_data:
-                print(f"  ✗ 2FA mismatch for {login}: type expected={expected_type} got={got_type}, data expected={expected_data!r} got={got_data!r}")
+            if expected_type != got_type:
+                print(f"  ✗ 2FA type mismatch for {login}: expected={expected_type} got={got_type}")
+                all_ok = False
+                continue
+            sql = f"SELECT COALESCE(data_2fa,'') FROM panel_customers WHERE loginname='{login}';"
+            cmd = [
+                "mariadb",
+                f"-h{db_host}",
+                f"-P{db_port}",
+                f"-u{db_user}",
+                f"-p{db_pass}",
+                "-N",
+                "-B",
+                db_name,
+                "-e",
+                sql,
+            ]
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                got_data = result.stdout.strip()
+            except Exception as e:
+                print(f"  ✗ Could not read data_2fa for {login} from panel DB: {e}")
+                all_ok = False
+                continue
+            if expected_data != got_data:
+                print(f"  ✗ 2FA data mismatch for {login}: expected={expected_data!r} got={got_data!r}")
                 all_ok = False
                 continue
             print(f"  ✓ Customer 2FA verified for {login}")
@@ -779,7 +810,7 @@ def main():
     ))
     verifications.append((
         "Customer 2FA",
-        verify_customer_security(client, seed_summary.get("customer_security", {})),
+        verify_customer_security(client, seed_summary.get("customer_security", {}), env_file_values),
     ))
     verifications.append((
         "DataDump Schedules",

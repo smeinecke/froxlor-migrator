@@ -595,10 +595,21 @@ def ensure_email_forwarder(api: FroxlorApi, customer_id: int, mailbox: str, dest
             raise
 
 
-def ensure_email_sender_alias(api: FroxlorApi, customer_id: int, mailbox: str, allowed_sender: str) -> None:
+def ensure_email_sender_alias(
+    api: FroxlorApi,
+    customer_id: int,
+    mailbox: str,
+    allowed_sender: str,
+    db_host: str,
+    db_port: str,
+    db_root_user: str,
+    db_root_pass: str,
+    panel_db_name: str,
+) -> None:
     try:
         rows = api.call("EmailSender.listing", {"emailaddr": mailbox})
-    except ApiError:
+    except ApiError as exc:
+        print(f"  ! EmailSender.listing failed for {mailbox}: {exc}")
         return
     entries = rows.get("list", []) if isinstance(rows, dict) else (rows or [])
     existing = {str(_pick(item, "allowed_sender", default="")).strip().lower() for item in entries}
@@ -613,8 +624,27 @@ def ensure_email_sender_alias(api: FroxlorApi, customer_id: int, mailbox: str, a
                 "customerid": customer_id,
             },
         )
-    except ApiError:
-        return
+    except ApiError as exc:
+        # Froxlor 2.3+: EmailSender.add's validateLocalDomainOwnership compares
+        # the domain owner against CurrentUser (the admin API key), so admin
+        # callers can never add aliases for customer-owned domains. Mirror the
+        # API's own INSERT IGNORE into mail_sender_aliases instead.
+        print(f"  ! EmailSender.add failed for {mailbox} -> {allowed_sender}: {exc}; falling back to panel DB")
+        subprocess.run(
+            [
+                "python3",
+                "-c",
+                (
+                    "import pymysql; "
+                    f"conn=pymysql.connect(host={db_host!r}, port={int(db_port)!r}, user={db_root_user!r}, password={db_root_pass!r}, database={panel_db_name!r}, autocommit=True); "
+                    "cur=conn.cursor(); "
+                    'cur.execute("INSERT IGNORE INTO mail_sender_aliases SET email=%s, allowed_sender=%s", '
+                    f'({mailbox!r}, {allowed_sender!r})); '
+                    "cur.close(); conn.close()"
+                ),
+            ],
+            check=True,
+        )
 
 
 def ensure_ftp_account(api: FroxlorApi, customer_id: int, username: str, path: str, login_enabled: bool) -> None:
@@ -1203,6 +1233,11 @@ def main() -> None:
         customer_id=cust_c_id,
         mailbox="ops@secure-demo.test",
         allowed_sender="alerts@secure-demo.test",
+        db_host=db_host,
+        db_port=db_port,
+        db_root_user=db_root_user,
+        db_root_pass=db_root_pass,
+        panel_db_name=panel_db_name,
     )
     ensure_ftp_account(
         api,

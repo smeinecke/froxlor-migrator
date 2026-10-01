@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
+from froxlor_migrator.api import FroxlorApiError
 from froxlor_migrator.migration.accounts import MigratorAccountOps
 from froxlor_migrator.migration.types import MigrationError
 
@@ -14,6 +15,7 @@ class StubTarget:
         self._ftps: list[dict[str, object]] = []
         self._ssh_keys: list[dict[str, object]] = []
         self._data_dumps: list[dict[str, object]] = []
+        self._emails: list[dict[str, object]] = []
         self.calls: list[tuple[str, dict[str, object]]] = []
 
     def list_email_forwarders(self, customerid: int) -> list[dict[str, object]]:
@@ -21,6 +23,9 @@ class StubTarget:
 
     def list_email_senders(self, customerid: int) -> list[dict[str, object]]:
         return self._email_senders
+
+    def list_emails(self) -> list[dict[str, object]]:
+        return self._emails
 
     def list_ftps(self, customerid: int) -> list[dict[str, object]]:
         return self._ftps
@@ -56,6 +61,48 @@ class MigratorAccountOpsTests(unittest.TestCase):
 
         ops._ensure_email_sender_aliases(1, [{"email": "a@x", "allowed_sender": "z"}, {"email": "b@x", "allowed_sender": "y"}])
         self.assertIn(("EmailSender.add", {"emailaddr": "b@x", "allowed_sender": "y", "customerid": 1}), target.calls)
+
+    def test_ensure_email_sender_aliases_sql_fallback_for_admin_key(self) -> None:
+        """Froxlor 2.3+ rejects EmailSender.add via admin keys when the
+        sender domain is customer-owned; the SQL fallback must kick in."""
+        target = StubTarget()
+
+        def failing_call(command: str, payload: dict[str, object]) -> None:
+            if command == "EmailSender.add":
+                raise FroxlorApiError('Given domain "x" cannot be used.')
+            target.calls.append((command, payload))
+
+        target.call = failing_call  # type: ignore[method-assign]
+        target._emails = [{"email_full": "b@x", "popaccountid": 42}]
+        ops = StubOps(target)
+        sql_calls: list[str] = []
+        ops._exec_target_panel_sql = sql_calls.append  # type: ignore[method-assign]
+        ops._sql_utf8_literal = lambda v: f"'{v}'"  # type: ignore[method-assign]
+
+        ops._ensure_email_sender_aliases(1, [{"email": "b@x", "allowed_sender": "y@x"}])
+        self.assertEqual(
+            ["INSERT IGNORE INTO mail_sender_aliases SET email='b@x', allowed_sender='y@x';"],
+            sql_calls,
+        )
+
+    def test_sender_alias_sql_fallback_raises_for_forward_only_mailbox(self) -> None:
+        target = StubTarget()
+
+        def failing_call(command: str, payload: dict[str, object]) -> None:
+            if command == "EmailSender.add":
+                raise FroxlorApiError("emailhasnoaccount")
+            target.calls.append((command, payload))
+
+        target.call = failing_call  # type: ignore[method-assign]
+        target._emails = [{"email_full": "b@x", "popaccountid": 0}]
+        ops = StubOps(target)
+        sql_calls: list[str] = []
+        ops._exec_target_panel_sql = sql_calls.append  # type: ignore[method-assign]
+        ops._sql_utf8_literal = lambda v: f"'{v}'"  # type: ignore[method-assign]
+
+        with self.assertRaises(MigrationError):
+            ops._ensure_email_sender_aliases(1, [{"email": "b@x", "allowed_sender": "y@x"}])
+        self.assertEqual([], sql_calls)
 
     def test_ensure_ftp_accounts_updates_and_adds(self) -> None:
         target = StubTarget()

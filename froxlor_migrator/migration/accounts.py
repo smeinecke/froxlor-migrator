@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ..api import FroxlorApiError
 from ..util import as_bool, as_int, data_dump_key, ftp_username, mailbox_address, pick, random_password, ssh_key_identity
 from .types import MigrationError, ResourceRow
 
@@ -17,6 +18,8 @@ class MigratorAccountOps:
 
         def _mailbox_address(self, mailbox: ResourceRow) -> str: ...
         def _relative_customer_path(self, path: str, customer_login: str) -> str: ...
+        def _exec_target_panel_sql(self, sql: str) -> None: ...
+        def _sql_utf8_literal(self, value: str) -> str: ...
 
     def _ensure_mail_attribute_rows(
         self,
@@ -25,6 +28,7 @@ class MigratorAccountOps:
         list_target_rows: Callable[[], list[dict[str, Any]]],
         value_field: str,
         add_command: str,
+        add_fallback: Callable[[str, str], None] | None = None,
     ) -> None:
         """Shared forwarder/sender-alias dedup+add loop: rows are keyed by
         (mailbox address, value_field) and missing keys are added."""
@@ -45,14 +49,19 @@ class MigratorAccountOps:
             key = (emailaddr, value)
             if key in existing:
                 continue
-            self.target.call(
-                add_command,
-                {
-                    "emailaddr": emailaddr,
-                    value_field: value,
-                    "customerid": target_customer_id,
-                },
-            )
+            try:
+                self.target.call(
+                    add_command,
+                    {
+                        "emailaddr": emailaddr,
+                        value_field: value,
+                        "customerid": target_customer_id,
+                    },
+                )
+            except FroxlorApiError:
+                if add_fallback is None:
+                    raise
+                add_fallback(emailaddr, value)
             existing.add(key)
 
     def _ensure_email_forwarders(self, target_customer_id: int, forwarders: list[dict[str, Any]]) -> None:
@@ -71,6 +80,28 @@ class MigratorAccountOps:
             lambda: self.target.list_email_senders(customerid=target_customer_id),
             "allowed_sender",
             "EmailSender.add",
+            add_fallback=self._add_sender_alias_sql,
+        )
+
+    def _add_sender_alias_sql(self, emailaddr: str, allowed_sender: str) -> None:
+        """Fallback for EmailSender.add, which rejects admin-API callers when the
+        allowed_sender's domain is owned by a customer (validateLocalDomainOwnership
+        compares CurrentUser, not the target customer). Only used when the target
+        mailbox actually has a mail account — otherwise the API error was
+        legitimate and is re-raised."""
+        target_row = next(
+            (row for row in self.target.list_emails() if mailbox_address(row) == emailaddr),
+            None,
+        )
+        if target_row is None or not self._mailbox_has_account(target_row):
+            raise MigrationError(
+                f"Cannot add sender alias {allowed_sender} for {emailaddr}: "
+                "target mailbox does not exist or has no mail account"
+            )
+        self._exec_target_panel_sql(
+            "INSERT IGNORE INTO mail_sender_aliases SET "
+            f"email={self._sql_utf8_literal(emailaddr)}, "
+            f"allowed_sender={self._sql_utf8_literal(allowed_sender)};"
         )
 
     def _ensure_ftp_accounts(
