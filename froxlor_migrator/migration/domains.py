@@ -640,7 +640,7 @@ class MigratorDomainOps:
             refreshed = self.target.list_subdomains(customerid=target_customer_id)
             target_by_name = {str(pick(item, "domain", "domainname", default="")).strip().lower(): item for item in refreshed}
 
-    def _is_custom_zone_record(self, row: dict[str, Any]) -> bool:
+    def _is_custom_zone_record(self, row: dict[str, Any], domainname: str = "") -> bool:
         for flag in (
             "is_default",
             "isdefault",
@@ -651,8 +651,15 @@ class MigratorDomainOps:
             if as_int(pick(row, flag, default=0)) == 1:
                 return False
         record_type = str(pick(row, "type", default="")).upper()
-        if record_type in {"SOA", "NS"}:
+        if record_type == "SOA":
             return False
+        if record_type == "NS":
+            # Only the apex NS records are auto-managed; NS records for
+            # delegated sub-zones are custom and must be migrated.
+            record_name = str(pick(row, "record", default="")).strip().lower().rstrip(".")
+            apex = domainname.strip().lower().rstrip(".")
+            if record_name in {"", "@"} or (apex and record_name == apex):
+                return False
         return True
 
     def _ensure_domain_zones(self, domain_zones: list[dict[str, Any]], ip_value_mapping: dict[str, str]) -> None:
@@ -678,7 +685,7 @@ class MigratorDomainOps:
                 for item in target_rows
             }
             for row in rows:
-                if not self._is_custom_zone_record(row):
+                if not self._is_custom_zone_record(row, domainname):
                     continue
                 record_type = str(pick(row, "type", default="")).strip().upper()
                 content = str(pick(row, "content", default="")).strip()

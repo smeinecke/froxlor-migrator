@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -14,8 +15,9 @@ from .froxlor_mysql import (
     load_local_sql_credentials,
 )
 from .mysql_driver import query as mysql_query
-from .mysql_tunnel import open_ssh_tunnel
+from .mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from .ssh_driver import SshDriver
+from .transfer import remote_sudo_prefix
 from .util import as_bool, as_int, pick
 
 
@@ -65,6 +67,9 @@ def _data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
 
 def _docroot_in_any_root(docroot: str, roots: list[str]) -> bool:
     value = docroot.strip()
+    if not value or not value.startswith("/"):
+        # Empty/relative docroots resolve inside the customer homedir.
+        return True
     for root in roots:
         normalized = root.rstrip("/")
         if not normalized:
@@ -74,19 +79,38 @@ def _docroot_in_any_root(docroot: str, roots: list[str]) -> bool:
     return False
 
 
-def _expected_target_docroot(source_docroot: str, source_roots: list[str], target_root: str) -> str:
+def _expected_target_docroot(source_docroot: str, source_roots: list[str], target_root: str, customer_login: str = "") -> str:
+    """Mirror the migrator's two-hop docroot mapping.
+
+    ``source_roots`` is ``[source_web_root, source_transfer_root]``. The first
+    hop resolves the API documentroot to a source filesystem path
+    (:meth:`_resolve_source_docroot`), the second maps it onto the target web
+    root (:meth:`_resolve_target_docroot`). Verify matches customers by login
+    name, so the target login equals ``customer_login``.
+    """
     value = source_docroot.strip()
     target_base = target_root.rstrip("/")
-    for root in source_roots:
-        normalized = root.rstrip("/")
-        if not normalized:
-            continue
-        if value == normalized:
-            return target_base
-        if value.startswith(normalized + "/"):
-            suffix = value[len(normalized) :]
-            return target_base + suffix
-    return value
+    web_root = source_roots[0].rstrip("/") if source_roots else ""
+    transfer_root = source_roots[1].rstrip("/") if len(source_roots) > 1 else web_root
+
+    # Hop 1: API documentroot -> source filesystem path.
+    if value.startswith("/"):
+        if web_root and value.startswith(web_root + "/"):
+            source_fs = transfer_root + value[len(web_root) :]
+        else:
+            source_fs = value
+    else:
+        source_fs = f"{transfer_root}/{customer_login}/{value.lstrip('/')}"
+
+    # Hop 2: source filesystem path -> target documentroot.
+    if transfer_root and source_fs.startswith(transfer_root + "/"):
+        suffix = source_fs[len(transfer_root) :].lstrip("/")
+        parts = suffix.split("/", 1)
+        if len(parts) == 2 and parts[0] == customer_login:
+            return f"{target_base}/{customer_login}/{parts[1]}"
+        return f"{target_base}/{suffix}"
+    rel = value.lstrip("/")
+    return f"{target_base}/{customer_login}/{rel}" if customer_login else f"{target_base}/{rel}"
 
 
 def _normalize_customer_map(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -115,12 +139,14 @@ def _compare_domain(
     target_php_map: dict[int, str],
     source_roots: list[str],
     target_root: str,
+    customer_login: str = "",
 ) -> list[str]:
     errors: list[str] = []
     expected_documentroot = _expected_target_docroot(
         str(pick(source_row, "documentroot", default="")),
         source_roots,
         target_root,
+        customer_login,
     )
     checks = [
         (
@@ -320,19 +346,10 @@ def _compare_customer(source_row: dict[str, Any], target_row: dict[str, Any]) ->
             as_int(pick(source_row, "store_defaultindex", default=0)),
             as_int(pick(target_row, "store_defaultindex", default=0)),
         ),
-        (
-            "deactivated",
-            as_int(pick(source_row, "deactivated", default=0)),
-            as_int(pick(target_row, "deactivated", default=0)),
-        ),
     ]
     for field, src, dst in checks:
         if src != dst:
             errors.append(f"{field} source={src!r} target={dst!r}")
-    source_theme = str(pick(source_row, "theme", default="")).strip().lower()
-    target_theme = str(pick(target_row, "theme", default="")).strip().lower()
-    if source_theme and source_theme != target_theme:
-        errors.append(f"theme source={source_theme!r} target={target_theme!r}")
     source_password = str(pick(source_row, "password", default="")).strip()
     target_password = str(pick(target_row, "password", default="")).strip()
     if source_password and source_password != target_password:
@@ -342,6 +359,25 @@ def _compare_customer(source_row: dict[str, Any], target_row: dict[str, Any]) ->
     if str(pick(source_row, "data_2fa", default="")).strip() != str(pick(target_row, "data_2fa", default="")).strip():
         errors.append("data_2fa mismatch")
     return errors
+
+
+def _customer_warnings(source_row: dict[str, Any], target_row: dict[str, Any]) -> list[str]:
+    """Fields that are only applied when updating an existing customer.
+
+    The migrator intentionally strips deactivated/theme on Customers.add, so a
+    mismatch for a freshly created customer is expected - report it as a
+    warning instead of failing the verification.
+    """
+    warnings: list[str] = []
+    source_deactivated = as_int(pick(source_row, "deactivated", default=0))
+    target_deactivated = as_int(pick(target_row, "deactivated", default=0))
+    if source_deactivated != target_deactivated:
+        warnings.append(f"deactivated source={source_deactivated!r} target={target_deactivated!r}")
+    source_theme = str(pick(source_row, "theme", default="")).strip().lower()
+    target_theme = str(pick(target_row, "theme", default="")).strip().lower()
+    if source_theme and source_theme != target_theme:
+        warnings.append(f"theme source={source_theme!r} target={target_theme!r}")
+    return warnings
 
 
 def _compare_subdomain(
@@ -493,7 +529,7 @@ def _compare_dir_option(source_row: dict[str, Any], target_row: dict[str, Any]) 
     return errors
 
 
-def _is_custom_zone_record(row: dict[str, Any]) -> bool:
+def _is_custom_zone_record(row: dict[str, Any], domainname: str = "") -> bool:
     for flag in (
         "is_default",
         "isdefault",
@@ -504,8 +540,15 @@ def _is_custom_zone_record(row: dict[str, Any]) -> bool:
         if as_int(pick(row, flag, default=0)) == 1:
             return False
     record_type = str(pick(row, "type", default="")).upper()
-    if record_type in {"SOA", "NS"}:
+    if record_type == "SOA":
         return False
+    if record_type == "NS":
+        # Only the apex NS records are auto-managed; NS records for delegated
+        # sub-zones are custom and must be migrated/verified.
+        record_name = str(pick(row, "record", default="")).strip().lower().rstrip(".")
+        apex = domainname.strip().lower().rstrip(".")
+        if record_name in {"", "@"} or (apex and record_name == apex):
+            return False
     return True
 
 
@@ -518,10 +561,18 @@ def _target_connect_kwargs_via_ssh(config) -> Iterator[dict[str, Any]]:
     ssh = SshDriver(config)
     try:
         target_creds = None
+        sudo = remote_sudo_prefix(config)
         for path in froxlor_userdata_paths():
+            content = ""
             try:
                 content = ssh.read_file(path)
             except Exception:
+                # The SSH user may not be able to read userdata.inc.php via
+                # SFTP; fall back to sudo cat like the migrator does.
+                proc = ssh.run(f"{sudo}cat {shlex.quote(path)}")
+                if proc.returncode == 0:
+                    content = proc.stdout
+            if not content.strip():
                 continue
             target_creds = extract_sql_root_credentials(content)
             if target_creds:
@@ -529,11 +580,19 @@ def _target_connect_kwargs_via_ssh(config) -> Iterator[dict[str, Any]]:
         if not target_creds:
             raise RuntimeError("Could not parse target sql_root credentials from froxlor userdata files via SSH")
         kwargs = connect_kwargs_from_credentials(target_creds)
+        remote_socket = str(kwargs.get("unix_socket", "")).strip()
+        if remote_socket:
+            # Paramiko cannot open direct-streamlocal channels; ssh -L forwards
+            # the remote socket to a local socket path used via unix_socket.
+            tunneled = dict(kwargs)
+            with open_ssh_unix_socket_tunnel(config, remote_socket) as local_socket:
+                tunneled["unix_socket"] = local_socket
+                yield tunneled
+            return
         remote_host = str(kwargs.get("host", "localhost"))
         remote_port = int(kwargs.get("port", 3306))
         with open_ssh_tunnel(ssh.transport(), remote_host, remote_port) as (_, local_port):
             tunneled = dict(kwargs)
-            tunneled.pop("unix_socket", None)
             tunneled["host"] = "127.0.0.1"
             tunneled["port"] = local_port
             yield tunneled
@@ -638,6 +697,8 @@ def main() -> int:
         dst_id = as_int(pick(dst_customer, "customerid", "id", default=0))
 
         customer_errs = _compare_customer(src_customer, dst_customer)
+        for warning in _customer_warnings(src_customer, dst_customer):
+            print(f"WARN customer={login}: {warning}")
         if customer_errs:
             print(f"FAIL customer={login}: {'; '.join(customer_errs)}")
             failures += 1
@@ -729,6 +790,7 @@ def main() -> int:
                 target_php_map,
                 source_roots,
                 config.paths.target_web_root,
+                login,
             )
             if errs:
                 print(f"FAIL customer={login} domain={domain}: {'; '.join(errs)}")
@@ -758,22 +820,22 @@ def main() -> int:
                     str(pick(item, "record", default="")).strip().lower(),
                     str(pick(item, "type", default="")).strip().upper(),
                     as_int(pick(item, "prio", default=0)),
-                    str(pick(item, "content", default="")).strip().lower(),
+                    str(pick(item, "content", default="")).strip(),
                     as_int(pick(item, "ttl", default=18000)),
                 )
                 for item in source.list_domain_zones(domainname=domain)
-                if _is_custom_zone_record(item)
+                if _is_custom_zone_record(item, domain)
             }
             dst_zones = {
                 (
                     str(pick(item, "record", default="")).strip().lower(),
                     str(pick(item, "type", default="")).strip().upper(),
                     as_int(pick(item, "prio", default=0)),
-                    str(pick(item, "content", default="")).strip().lower(),
+                    str(pick(item, "content", default="")).strip(),
                     as_int(pick(item, "ttl", default=18000)),
                 )
                 for item in target.list_domain_zones(domainname=domain)
-                if _is_custom_zone_record(item)
+                if _is_custom_zone_record(item, domain)
             }
             missing_zones = sorted(src_zones - dst_zones)
             for zone in missing_zones:

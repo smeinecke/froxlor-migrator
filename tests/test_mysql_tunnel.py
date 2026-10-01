@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import socket
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from froxlor_migrator.mysql_tunnel import _ForwardHandler, open_ssh_tunnel
+from froxlor_migrator.mysql_tunnel import _ForwardHandler, open_ssh_tunnel, open_ssh_unix_socket_tunnel
 
 
 class DummyTransport:
@@ -101,3 +102,53 @@ class MysqlTunnelTests(unittest.TestCase):
         # Server should be gone after exiting the context manager
         with self.assertRaises(ConnectionRefusedError):
             socket.create_connection((host, port), timeout=0.5)
+
+    def test_unix_socket_tunnel_forwards_via_ssh_dash_L(self) -> None:
+        # Paramiko cannot open direct-streamlocal channels, so the remote
+        # socket is forwarded with `ssh -L local.sock:remote.sock`.
+        popen_calls = []
+
+        class DummyProcess:
+            def __init__(self):
+                self.terminated = False
+
+            def poll(self):
+                return None if not self.terminated else 0
+
+            def terminate(self):
+                self.terminated = True
+
+            def wait(self, timeout=None):
+                self.terminated = True
+                return 0
+
+            def kill(self):
+                self.terminated = True
+
+            @property
+            def stderr(self):
+                return None
+
+        def fake_popen(cmd, stdout=None, stderr=None, text=None):
+            popen_calls.append(cmd)
+            return DummyProcess()
+
+        config = SimpleNamespace(
+            commands=SimpleNamespace(ssh="ssh"),
+            ssh=SimpleNamespace(strict_host_key_checking=True, port=2222, user="deploy", host="target.example"),
+        )
+        with (
+            patch("subprocess.Popen", fake_popen),
+            patch("froxlor_migrator.mysql_tunnel.os.path.exists", return_value=True),
+        ):
+            with open_ssh_unix_socket_tunnel(config, "/run/mysqld/mysqld.sock") as local_socket:
+                self.assertTrue(local_socket.endswith("mysql.sock"))
+
+        self.assertEqual(1, len(popen_calls))
+        cmd = popen_calls[0]
+        self.assertIn("-L", cmd)
+        forward_spec = cmd[cmd.index("-L") + 1]
+        self.assertTrue(forward_spec.endswith(":/run/mysqld/mysqld.sock"))
+        self.assertIn("-N", cmd)
+        self.assertIn("BatchMode=yes", cmd)
+        self.assertIn("ExitOnForwardFailure=yes", cmd)

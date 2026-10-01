@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import shlex
-import subprocess
 import tempfile
-import time
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -26,7 +23,7 @@ from ..froxlor_mysql import (
 )
 from ..mysql_driver import execute as mysql_execute
 from ..mysql_driver import query as mysql_query
-from ..mysql_tunnel import open_ssh_tunnel
+from ..mysql_tunnel import open_ssh_tunnel, open_ssh_unix_socket_tunnel
 from ..transfer import TransferRunner, remote_sudo_prefix
 from ..util import as_int, pick
 from .types import MigrationError, ResourceRow, Selection
@@ -465,60 +462,13 @@ class MigratorCore:
 
     @contextmanager
     def _open_ssh_unix_socket_tunnel(self, remote_socket: str) -> Iterator[str]:
-        with tempfile.TemporaryDirectory(prefix="froxlor-mysql-sock-") as tmpdir:
-            local_socket = os.path.join(tmpdir, "mysql.sock")
-            cmd = shlex.split(self.config.commands.ssh)
-            if not cmd:
-                raise MigrationError("SSH command is empty; cannot open unix socket tunnel")
-            if not self.config.ssh.strict_host_key_checking:
-                cmd.extend(["-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null"])
-            cmd.extend([
-                "-o",
-                "ExitOnForwardFailure=yes",
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "ConnectTimeout=15",
-                "-N",
-                "-L",
-                f"{local_socket}:{remote_socket}",
-                "-p",
-                str(self.config.ssh.port),
-                "-l",
-                self.config.ssh.user,
-                self.config.ssh.host,
-            ])
-
-            process = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
-            try:
-                ready = False
-                for _ in range(50):
-                    if process.poll() is not None:
-                        break
-                    if os.path.exists(local_socket):
-                        ready = True
-                        break
-                    time.sleep(0.1)
-                if not ready:
-                    if process.poll() is None:
-                        process.terminate()
-                        try:
-                            process.wait(timeout=5)
-                        except Exception:
-                            process.kill()
-                            process.wait()
-                    stderr_text = ""
-                    if process.stderr is not None:
-                        stderr_text = process.stderr.read().strip()
-                    raise MigrationError(f"Could not establish SSH unix socket tunnel for MySQL: {stderr_text[:300]}")
+        try:
+            with open_ssh_unix_socket_tunnel(self.config, remote_socket) as local_socket:
                 yield local_socket
-            finally:
-                if process.poll() is None:
-                    process.terminate()
-                    try:
-                        process.wait(timeout=5)
-                    except Exception:
-                        process.kill()
+        except MigrationError:
+            raise
+        except Exception as exc:
+            raise MigrationError(str(exc)) from exc
 
     def _run_target_mysql_via_remote_cli(self, sql: str, database: str) -> str:
         suffix = uuid4().hex[:8]
