@@ -602,3 +602,50 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
 - [ ] **Local `run()` timeout** — `[behavior] local_command_timeout_seconds`
   exists (0=disabled); tar/doveadm on huge trees may exceed an hour —
   needs per-call policy, not a blunt global default.
+
+### Round 7 (structural debt — all three deferred items resolved)
+
+- [x] **N+1 listing refreshes** (`aac213b`) — ensure-* operations now
+  merge `add`/`update` response rows into their local indexes instead of
+  re-listing the whole target collection per item; mailbox reloads use
+  `Emails.get` with a list-scan fallback, and `_get_target_domain` uses
+  `Domains.get(domainname)` single-row fetches.
+
+- [x] **Per-call timeout policy** (`663b64a`) — command probes get a
+  hard ~30s cap; tar/doveadm/mysqldump transfers use
+  `[behavior] transfer_timeout_seconds` (0 = unlimited, preserving
+  multi-hour migrations of large trees).
+
+- [x] **PHP `userdata.inc.php` scanner** (`4377f5f`) — replaced the
+  non-greedy `(.*?)\];` body regexes with `_php_bracket_span`, a
+  depth- and quote-aware scanner that survives `]`/`];` inside string
+  values and arbitrary nested arrays. `$sql`/`$sql_root` extraction
+  shares the same scanner.
+
+- [x] **Xenon gate now passes at `-b D -m B -a B`** — all rank-E/F
+  blocks refactored instead of weakening the gate:
+  - `mysql_driver._iter_mysql_statements` F → `_MysqlScriptScanner`
+    class, one method per lexer state (`7916975`).
+  - `api.list_email_forwarders`/`list_email_senders` E/D → shared
+    `_forwarder_rows_from_payload`/`_sender_rows_from_payload`
+    normalizers (`0862be3`).
+  - `Migrator.execute` F → `_Progress` reporter + `_sync_web_config`,
+    `_sync_databases`, `_sync_mail_objects`, `_transfer_files_and_mail`
+    phase methods (`fff7e5f`).
+  - `tui.run_app` F → extracted `_parse_args`, `_resolve_source_customer`,
+    `_discover_customer_resources`, `_resolve_mode`,
+    `_resolve_target_customer`, `_select_domains`, `_select_resources`,
+    `_resolve_mappings`, `_resolve_includes`, `_print_migration_plan`,
+    `_execute_migration`, `_print_migration_result`; `_build_replay_command`
+    now uses per-flag emitter helpers (`f9736c7`).
+  - `verify_migration.main` F → `_Report` emitter +
+    `_load_customer_resources` (lazy loaders keep `--skip-*` from hitting
+    the API) + per-resource `_verify_*` helpers (`e72f318`).
+
+### Watch items (complexity hotspots kept at rank C)
+
+`_build_php_setting_map` (C19), `TransferRunner.run_remote` (C19),
+`SshDriver.run` (C16), `_build_ip_map`/`_print_migration_plan` (C16),
+`_choose_rows`/`preflight_commands`/`run` (C15). These are interactive
+prompts or retry/exec plumbing where further splitting would add
+indirection without real clarity; revisit only if they grow.
