@@ -47,7 +47,8 @@ class SshDriver:
             client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
         else:
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            # Deliberate opt-out when strict_host_key_checking=false.
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec B507
 
         identity_file = _identity_file_from_ssh_command(self.config.commands.ssh)
         key_filename = str(Path(identity_file).expanduser()) if identity_file else None

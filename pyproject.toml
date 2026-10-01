@@ -23,6 +23,7 @@ dev = [
   "pyright>=1.1.400",
   "pytest>=9.0.2",
   "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.4",
   "ruff>=0.11.0",
   "vulture>=2.15",
   "xenon>=0.9.3",
@@ -58,6 +59,7 @@ venv = ".venv"
 [tool.pytest.ini_options]
 addopts = [
     "--import-mode=importlib",
+    "--strict-markers",
     "--cov=froxlor_migrator",
     "--cov-report=term-missing",
     "--cov-report=xml",
@@ -66,6 +68,20 @@ pythonpath = ["."]
 norecursedirs = [
     "testing/data",
 ]
+markers = [
+    "integration: real integration tests that require external services/tools",
+]
+
+[tool.coverage.report]
+fail_under = 75
+
+[tool.bandit]
+exclude_dirs = [".venv", "tests", "dist", "build", "testing"]
+# Inherent to a migration tool whose core job is building remote commands and
+# SQL from API data: subprocess/paramiko shell-out, PATH-resolved binaries,
+# string-built SQL, remote /tmp paths, and best-effort probe except-blocks.
+# `random` is only used for logfile suffixes; B507 is inline-nosec'd.
+skips = ["B404", "B603", "B607", "B601", "B608", "B108", "B110", "B112", "B105"]
 
 [tool.vulture]
 exclude = ["dist", "build", "venv", ".venv", "tests", "docs"]

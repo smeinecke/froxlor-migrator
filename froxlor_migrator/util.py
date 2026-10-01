@@ -45,7 +45,7 @@ def slugify(value: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
     if clean:
         return clean
-    return f"migration-{random.randint(1000, 9999)}"
+    return f"migration-{random.randint(1000, 9999)}"  # nosec B311
 
 
 def parse_multi_select(raw: str, max_index: int) -> list[int]:
