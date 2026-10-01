@@ -95,7 +95,11 @@ class MigratorDomainOpsTests(unittest.TestCase):
         ops = DummyDomainOps()
         domain = {"documentroot": "/var/www/customer/site"}
         self.assertEqual("/var/www/transfer/customer/site", ops._resolve_source_docroot(domain, "customer"))
-        self.assertEqual("/var/www/customer/site", ops._resolve_target_docroot(domain, "customer", "/var/www/transfer/customer/site"))
+        self.assertEqual("/var/www/customer/site", ops._resolve_target_docroot(domain, "customer", "customer", "/var/www/transfer/customer/site"))
+        # Renamed target customer: the customer's directory component is remapped
+        self.assertEqual("/var/www/newlogin/site", ops._resolve_target_docroot(domain, "customer", "newlogin", "/var/www/transfer/customer/site"))
+        # Docroots outside the customer's own directory are preserved as-is
+        self.assertEqual("/var/www/shared/site", ops._resolve_target_docroot(domain, "customer", "newlogin", "/var/www/transfer/shared/site"))
 
     def test_fix_transferred_docroot_ownership_skips_in_dry_run(self) -> None:
         ops = DummyDomainOps()
@@ -193,6 +197,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
             target_customer_id=42,
             domain=domain,
             customer_login="bob",
+            target_login="bob",
             php_setting_map=php_setting_map,
             ip_mapping=ip_mapping,
             ip_value_mapping=ip_value_mapping,
@@ -205,7 +210,6 @@ class MigratorDomainOpsTests(unittest.TestCase):
         expected = {
             "customerid": 42,
             "loginname": "bob",
-            "adminid": 77,
             "is_stdsubdomain": True,
             "documentroot": "/var/www/customer/site",
             "isemaildomain": True,
@@ -238,7 +242,6 @@ class MigratorDomainOpsTests(unittest.TestCase):
             "selectserveralias": 1,
             "subcanemaildomain": 1,
             "speciallogfile": True,
-            "alias": 1,
             "registration_date": "2021-01-01",
             "termination_date": "2022-01-01",
             "caneditdomain": True,
@@ -259,6 +262,8 @@ class MigratorDomainOpsTests(unittest.TestCase):
         for key, expected_value in expected.items():
             self.assertIn(key, payload)
             self.assertEqual(expected_value, payload[key])
+        for key in ("adminid", "alias"):
+            self.assertNotIn(key, payload)
 
     def test_ensure_domains_handles_letsencrypt_fallback(self) -> None:
         # _domain_payload currently sets letsencrypt False, so this is mostly a

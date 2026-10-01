@@ -247,7 +247,7 @@ class ExecuteToggleTests(unittest.TestCase):
 
         calls: list[str] = []
         migrator._emit_progress = lambda step, total, status: None  # type: ignore[method-assign]
-        migrator._ensure_target_customer = lambda customer, target_customer: 23  # type: ignore[method-assign]
+        migrator._ensure_target_customer = lambda customer, target_customer=None, php_setting_map=None: 23  # type: ignore[method-assign]
         migrator._build_ip_value_mapping = lambda domains, ip_mapping: {}  # type: ignore[method-assign]
         migrator._ensure_domains = lambda *args, **kwargs: calls.append("domains")  # type: ignore[method-assign]
         migrator._sync_domain_redirects = lambda domains: calls.append("redirects")  # type: ignore[method-assign]

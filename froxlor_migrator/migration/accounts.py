@@ -75,9 +75,16 @@ class MigratorAccountOps:
             )
             existing.add(key)
 
-    def _ensure_ftp_accounts(self, target_customer_id: int, ftp_accounts: list[dict[str, Any]], customer_login: str) -> None:
+    def _ensure_ftp_accounts(
+        self,
+        target_customer_id: int,
+        ftp_accounts: list[dict[str, Any]],
+        customer_login: str,
+        target_login: str | None = None,
+    ) -> None:
         if not ftp_accounts:
             return
+        target_login = target_login or customer_login
         target_rows = self.target.list_ftps(customerid=target_customer_id)
         by_username = {str(pick(row, "username", "ftpuser", default="")).strip().lower(): row for row in target_rows}
         for row in ftp_accounts:
@@ -91,7 +98,7 @@ class MigratorAccountOps:
                 if marker in homedir:
                     ftp_path = homedir.split(marker, 1)[1].strip("/")
             if not ftp_path:
-                ftp_path = customer_login
+                ftp_path = target_login
             payload = {
                 "path": ftp_path,
                 "ftp_description": str(pick(row, "description", "ftp_description", default="")),
@@ -219,11 +226,18 @@ class MigratorAccountOps:
                 raise
             existing.add(key)
 
-    def _ensure_dir_options(self, target_customer_id: int, dir_options: list[dict[str, Any]], customer_login: str) -> None:
+    def _ensure_dir_options(
+        self,
+        target_customer_id: int,
+        dir_options: list[dict[str, Any]],
+        customer_login: str,
+        target_login: str | None = None,
+    ) -> None:
         if not dir_options:
             return
+        target_login = target_login or customer_login
         target_rows = self.target.list_dir_options(customerid=target_customer_id)
-        by_path = {self._relative_customer_path(str(pick(row, "path", default="")), customer_login).lower(): row for row in target_rows}
+        by_path = {self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(): row for row in target_rows}
         for row in dir_options:
             path = self._relative_customer_path(str(pick(row, "path", default="")), customer_login)
             if not path:
@@ -250,15 +264,22 @@ class MigratorAccountOps:
             else:
                 self.target.call("DirOptions.add", payload)
             refreshed = self.target.list_dir_options(customerid=target_customer_id)
-            by_path = {self._relative_customer_path(str(pick(item, "path", default="")), customer_login).lower(): item for item in refreshed}
+            by_path = {self._relative_customer_path(str(pick(item, "path", default="")), target_login).lower(): item for item in refreshed}
 
-    def _ensure_dir_protections(self, target_customer_id: int, dir_protections: list[dict[str, Any]], customer_login: str) -> None:
+    def _ensure_dir_protections(
+        self,
+        target_customer_id: int,
+        dir_protections: list[dict[str, Any]],
+        customer_login: str,
+        target_login: str | None = None,
+    ) -> None:
         if not dir_protections:
             return
+        target_login = target_login or customer_login
         target_rows = self.target.list_dir_protections(customerid=target_customer_id)
         existing = {
             (
-                self._relative_customer_path(str(pick(row, "path", default="")), customer_login).lower(),
+                self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
                 str(pick(row, "username", default="")).strip().lower(),
             ): row
             for row in target_rows
@@ -326,11 +347,17 @@ class MigratorAccountOps:
             if expected != actual:
                 raise MigrationError(f"Mailbox setting mismatch after migration for {mailbox}: {field_name} expected={expected!r} actual={actual!r}")
 
+    def _mailbox_has_account(self, mailbox_row: ResourceRow) -> bool:
+        marker = pick(mailbox_row, "popaccountid", "ismailaccount", default=None)
+        if marker is None:
+            return True
+        return as_int(marker, default=0) > 0
+
     def _ensure_mailboxes(self, target_customer_id: int, mailboxes: list[dict[str, Any]]) -> list[str]:
         existing = {
-            str(pick(item, "email_full", "email", "emailaddr", default=""))
+            str(pick(item, "email_full", "email", "emailaddr", default="")).strip().lower()
             for item in self.target.list_emails(customerid=target_customer_id)
-            if str(pick(item, "email_full", "email", "emailaddr", default=""))
+            if str(pick(item, "email_full", "email", "emailaddr", default="")).strip()
         }
         transferable: list[str] = []
 
@@ -340,11 +367,16 @@ class MigratorAccountOps:
                 continue
             local, domain = mailbox.split("@", 1)
             email_payload = self._mailbox_payload(target_customer_id, mailbox_row)
+            has_account = self._mailbox_has_account(mailbox_row)
 
             if mailbox in existing:
                 if self.config.behavior.mailbox_exists == "fail":
                     raise MigrationError(f"Target mailbox already exists: {mailbox}")
                 if self.config.behavior.mailbox_exists == "skip":
+                    # Existing mailbox objects are left untouched, but their
+                    # content may still be transferred.
+                    if has_account:
+                        transferable.append(mailbox)
                     continue
             else:
                 self.target.call(
@@ -362,29 +394,31 @@ class MigratorAccountOps:
                         "iscatchall": email_payload["iscatchall"],
                     },
                 )
+                if has_account:
+                    self.target.call(
+                        "EmailAccounts.add",
+                        {
+                            "emailaddr": mailbox,
+                            "customerid": target_customer_id,
+                            "email_password": random_password(24),
+                            "alternative_email": str(pick(mailbox_row, "alternative_email", default="")),
+                            "email_quota": as_int(pick(mailbox_row, "quota", default=0)),
+                            "sendinfomail": False,
+                        },
+                    )
+
+            self.target.call("Emails.update", email_payload)
+            if has_account:
                 self.target.call(
-                    "EmailAccounts.add",
+                    "EmailAccounts.update",
                     {
                         "emailaddr": mailbox,
                         "customerid": target_customer_id,
-                        "email_password": random_password(24),
                         "alternative_email": str(pick(mailbox_row, "alternative_email", default="")),
                         "email_quota": as_int(pick(mailbox_row, "quota", default=0)),
-                        "sendinfomail": False,
+                        "deactivated": bool(as_int(pick(mailbox_row, "deactivated", default=0))),
                     },
                 )
-
-            self.target.call("Emails.update", email_payload)
-            self.target.call(
-                "EmailAccounts.update",
-                {
-                    "emailaddr": mailbox,
-                    "customerid": target_customer_id,
-                    "alternative_email": str(pick(mailbox_row, "alternative_email", default="")),
-                    "email_quota": as_int(pick(mailbox_row, "quota", default=0)),
-                    "deactivated": bool(as_int(pick(mailbox_row, "deactivated", default=0))),
-                },
-            )
 
             refreshed_mailboxes = self.target.list_emails(customerid=target_customer_id)
             target_mailbox = None
@@ -397,6 +431,7 @@ class MigratorAccountOps:
                 raise MigrationError(f"Mailbox verification failed: could not reload {mailbox}")
             self._verify_mailbox_settings(mailbox, email_payload, target_mailbox)
 
-            transferable.append(mailbox)
+            if has_account:
+                transferable.append(mailbox)
             existing.add(mailbox)
         return transferable

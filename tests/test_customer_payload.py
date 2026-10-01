@@ -7,23 +7,32 @@ from froxlor_migrator.migrate import Migrator
 
 
 class CustomerPayloadTests(unittest.TestCase):
-    def test_allowed_id_lists_support_json_and_scalar(self) -> None:
+    def test_allowed_phpconfigs_remapped_via_php_setting_map(self) -> None:
         migrator = object.__new__(Migrator)
-        payload = migrator._customer_payload({
-            "email": "user@example.test",
-            "allowed_phpconfigs": "[2, 5]",
-            "allowed_mysqlserver": "3",
-        })
+        payload = migrator._customer_payload(
+            {
+                "email": "user@example.test",
+                "allowed_phpconfigs": "[2, 5]",
+                "allowed_mysqlserver": "3",
+                "hosting_plan_id": 7,
+            },
+            {2: 20, 5: 50},
+        )
 
-        self.assertEqual([2, 5], payload["allowed_phpconfigs"])
-        self.assertEqual([3], payload["allowed_mysqlserver"])
+        self.assertEqual([20, 50], payload["allowed_phpconfigs"])
+        # Source-only identifiers must not be sent to the target API.
+        self.assertNotIn("allowed_mysqlserver", payload)
+        self.assertNotIn("hosting_plan_id", payload)
+        self.assertNotIn("adminid", payload)
 
-    def test_allowed_id_lists_fall_back_for_empty_values(self) -> None:
+    def test_allowed_phpconfigs_omitted_when_unmapped_or_empty(self) -> None:
         migrator = object.__new__(Migrator)
-        payload = migrator._customer_payload({"email": "user@example.test", "allowed_phpconfigs": ""})
+        payload = migrator._customer_payload({"email": "user@example.test", "allowed_phpconfigs": ""}, {1: 10})
 
-        self.assertEqual([1], payload["allowed_phpconfigs"])
-        self.assertEqual([0], payload["allowed_mysqlserver"])
+        self.assertNotIn("allowed_phpconfigs", payload)
+
+        payload = migrator._customer_payload({"email": "user@example.test", "allowed_phpconfigs": "[9]"}, {1: 10})
+        self.assertNotIn("allowed_phpconfigs", payload)
 
     def test_extract_sql_root_credentials_from_userdata(self) -> None:
         content = """

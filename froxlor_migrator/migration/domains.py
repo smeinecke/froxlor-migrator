@@ -197,13 +197,14 @@ class MigratorDomainOps:
         target_customer_id: int,
         domain: ResourceRow,
         customer_login: str,
+        target_login: str,
         php_setting_map: dict[int, int],
         ip_mapping: dict[int, int],
         ip_value_mapping: dict[str, str],
     ) -> tuple[str, str, dict[str, Any], list[int]]:
         domain_name = self._domain_name(domain)
         source_docroot = self._resolve_source_docroot(domain, customer_login)
-        target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
+        target_docroot = self._resolve_target_docroot(domain, customer_login, target_login, source_docroot)
         source_php_setting = as_int(pick(domain, "phpsettingid", default=0))
         mapped_php_setting = php_setting_map.get(source_php_setting, source_php_setting)
         source_server_alias = as_int(pick(domain, "wwwserveralias", "selectserveralias", default=0))
@@ -211,8 +212,7 @@ class MigratorDomainOps:
 
         payload = {
             "customerid": target_customer_id,
-            "loginname": customer_login,
-            "adminid": as_int(pick(domain, "adminid", default=0)),
+            "loginname": target_login,
             "is_stdsubdomain": bool(as_int(pick(domain, "is_stdsubdomain", default=0))),
             "documentroot": target_docroot,
             "isemaildomain": bool(as_int(pick(domain, "isemaildomain", default=0))),
@@ -245,7 +245,7 @@ class MigratorDomainOps:
             "selectserveralias": source_server_alias,
             "subcanemaildomain": as_int(pick(domain, "subcanemaildomain", default=0)),
             "speciallogfile": bool(as_int(pick(domain, "speciallogfile", default=0))),
-            "alias": as_int(pick(domain, "alias", default=0)),
+            "phpsettingid": mapped_php_setting,
             "registration_date": str(pick(domain, "registration_date", default="")),
             "termination_date": str(pick(domain, "termination_date", default="")),
             "caneditdomain": bool(as_int(pick(domain, "caneditdomain", default=0))),
@@ -259,8 +259,6 @@ class MigratorDomainOps:
             "dont_use_default_ssl_ipandport_if_empty": bool(as_int(pick(domain, "dont_use_default_ssl_ipandport_if_empty", default=0))),
             "deactivated": bool(as_int(pick(domain, "deactivated", default=0))),
         }
-        if mapped_php_setting > 0:
-            payload["phpsettingid"] = mapped_php_setting
         if mapped_ip_ids:
             payload["ipandport"] = [{"id": target_ip_id} for target_ip_id in sorted(set(mapped_ip_ids))]
         if mapped_ssl_ip_ids:
@@ -280,7 +278,6 @@ class MigratorDomainOps:
             ("phpsettingid", as_int(payload.get("phpsettingid", 0)), as_int(pick(target_domain, "phpsettingid", default=0))),
             ("isemaildomain", int(bool(payload["isemaildomain"])), as_int(pick(target_domain, "isemaildomain", default=0))),
             ("email_only", int(bool(payload["email_only"])), as_int(pick(target_domain, "email_only", default=0))),
-            ("alias", as_int(payload["alias"]), as_int(pick(target_domain, "alias", default=0))),
             ("speciallogfile", int(bool(payload["speciallogfile"])), as_int(pick(target_domain, "speciallogfile", default=0))),
             ("caneditdomain", int(bool(payload["caneditdomain"])), as_int(pick(target_domain, "caneditdomain", default=0))),
             ("isbinddomain", int(bool(payload["isbinddomain"])), as_int(pick(target_domain, "isbinddomain", default=0))),
@@ -334,13 +331,16 @@ class MigratorDomainOps:
         ip_mapping: dict[int, int],
         ip_value_mapping: dict[str, str],
         customer_login: str,
+        target_login: str | None = None,
     ) -> None:
+        target_login = target_login or customer_login
         existing_domains = {self._domain_name(item) for item in self.target.list_domains() if self._domain_name(item)}
         for domain in domains:
             domain_name, target_docroot, base_payload, mapped_ip_ids = self._domain_payload(
                 target_customer_id,
                 domain,
                 customer_login,
+                target_login,
                 php_setting_map,
                 ip_mapping,
                 ip_value_mapping,
@@ -600,11 +600,10 @@ class MigratorDomainOps:
                 continue
 
             source_php_setting = as_int(pick(row, "phpsettingid", default=0))
-            mapped_php_setting = php_setting_map.get(source_php_setting, source_php_setting)
+            mapped_php_setting = php_setting_map.get(source_php_setting, 0)
 
             payload = {
                 "domainname": full_name,
-                "alias": as_int(pick(row, "alias", default=0)),
                 "path": str(pick(row, "path", default="")),
                 "url": str(pick(row, "url", default="")),
                 "selectserveralias": as_int(pick(row, "wwwserveralias", "selectserveralias", default=0)),
@@ -621,9 +620,8 @@ class MigratorDomainOps:
                 "hsts_sub": bool(as_int(pick(row, "hsts_sub", default=0))),
                 "hsts_preload": bool(as_int(pick(row, "hsts_preload", default=0))),
                 "customerid": target_customer_id,
+                "phpsettingid": mapped_php_setting,
             }
-            if mapped_php_setting > 0:
-                payload["phpsettingid"] = mapped_php_setting
 
             target_row = target_by_name.get(full_name)
             if target_row:
@@ -702,7 +700,7 @@ class MigratorDomainOps:
                         "record": key[0],
                         "type": key[1],
                         "prio": key[2],
-                        "content": key[3],
+                        "content": content,
                         "ttl": key[4],
                     },
                 )
@@ -720,14 +718,23 @@ class MigratorDomainOps:
         documentroot = documentroot.lstrip("/")
         return f"{transfer_root}/{customer_login}/{documentroot}"
 
-    def _resolve_target_docroot(self, source_domain: dict[str, Any], customer_login: str, source_docroot: str) -> str:
+    def _resolve_target_docroot(
+        self,
+        source_domain: dict[str, Any],
+        source_login: str,
+        target_login: str,
+        source_docroot: str,
+    ) -> str:
         source_root = self.config.paths.source_transfer_root.rstrip("/")
         target_root = self.config.paths.target_web_root.rstrip("/")
         if source_docroot.startswith(source_root + "/"):
-            suffix = source_docroot[len(source_root) :]
-            return target_root + suffix
+            suffix = source_docroot[len(source_root) :].lstrip("/")
+            parts = suffix.split("/", 1)
+            if len(parts) == 2 and parts[0] == source_login:
+                return f"{target_root}/{target_login}/{parts[1]}"
+            return f"{target_root}/{suffix}"
         documentroot = str(pick(source_domain, "documentroot", default="")).strip().lstrip("/")
-        return f"{target_root}/{customer_login}/{documentroot}"
+        return f"{target_root}/{target_login}/{documentroot}"
 
     def _fix_transferred_docroot_ownership(self, target_docroot: str, target_login: str) -> None:
         if not target_login or self.runner.dry_run:

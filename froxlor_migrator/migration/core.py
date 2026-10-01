@@ -73,18 +73,15 @@ class MigratorCore:
         cleaned = path.strip().strip("/")
         if not cleaned:
             return ""
-        marker = f"/{customer_login.strip('/')}/"
-        lowered = cleaned.lower()
-        if marker.lower() in f"/{lowered}/":
-            original = cleaned
-            while marker in f"/{original}/":
-                if marker in original:
-                    original = original.split(marker, 1)[1].strip("/")
-                else:
-                    break
-            cleaned = original
-        if cleaned.startswith(customer_login.strip("/") + "/"):
-            cleaned = cleaned[len(customer_login.strip("/")) + 1 :]
+        login = customer_login.strip("/")
+        marker = f"/{login}/"
+        idx = f"/{cleaned.lower()}/".find(marker.lower())
+        if idx >= 0:
+            # Keep everything after the first /<login>/ component only; a nested
+            # directory that happens to equal the login must be preserved.
+            return cleaned[idx + len(marker) - 1 :].strip("/")
+        if cleaned.lower().startswith(login.lower() + "/"):
+            cleaned = cleaned[len(login) + 1 :]
         return cleaned
 
     def __init__(
@@ -180,8 +177,10 @@ class MigratorCore:
                 return customer
         return None
 
-    def _customer_payload(self, source_customer: ResourceRow) -> dict[str, Any]:
-        return {
+    def _customer_payload(self, source_customer: ResourceRow, php_setting_map: dict[int, int] | None = None) -> dict[str, Any]:
+        source_php_configs = self._coerce_id_list(pick(source_customer, "allowed_phpconfigs", default=[]), [])
+        mapped_php_configs = sorted({php_setting_map[config_id] for config_id in source_php_configs if php_setting_map and config_id in php_setting_map})
+        payload = {
             "email": str(pick(source_customer, "email", default="migration@example.invalid")),
             "name": str(pick(source_customer, "name", "lastname", default="Migrated")),
             "firstname": str(pick(source_customer, "firstname", default="Customer")),
@@ -223,20 +222,24 @@ class MigratorCore:
             "mysqls_ul": bool(as_int(pick(source_customer, "mysqls_ul", default=1))),
             "createstdsubdomain": bool(as_int(pick(source_customer, "createstdsubdomain", default=1))),
             "phpenabled": bool(as_int(pick(source_customer, "phpenabled", default=1))),
-            "allowed_phpconfigs": self._coerce_id_list(pick(source_customer, "allowed_phpconfigs", default=[]), [1]),
             "perlenabled": bool(as_int(pick(source_customer, "perlenabled", default=0))),
             "dnsenabled": bool(as_int(pick(source_customer, "dnsenabled", default=0))),
             "logviewenabled": bool(as_int(pick(source_customer, "logviewenabled", default=0))),
             "store_defaultindex": bool(as_int(pick(source_customer, "store_defaultindex", default=0))),
             "theme": str(pick(source_customer, "theme", default="")),
-            "hosting_plan_id": as_int(pick(source_customer, "hosting_plan_id", default=0)),
-            "new_customer_password": str(pick(source_customer, "new_customer_password", default="")),
-            "allowed_mysqlserver": self._coerce_id_list(pick(source_customer, "allowed_mysqlserver", default=[]), [0]),
             "type_2fa": as_int(pick(source_customer, "type_2fa", default=0)),
             "data_2fa": str(pick(source_customer, "data_2fa", default="")),
         }
+        if mapped_php_configs:
+            payload["allowed_phpconfigs"] = mapped_php_configs
+        return payload
 
-    def _ensure_target_customer(self, source_customer: ResourceRow, target_customer: ResourceRow | None = None) -> int:
+    def _ensure_target_customer(
+        self,
+        source_customer: ResourceRow,
+        target_customer: ResourceRow | None = None,
+        php_setting_map: dict[int, int] | None = None,
+    ) -> int:
         if target_customer:
             customer_id = as_int(pick(target_customer, "customerid", "id", default=0))
             if not customer_id:
@@ -244,7 +247,7 @@ class MigratorCore:
             return customer_id
 
         existing = self._find_target_customer(source_customer)
-        payload = self._customer_payload(source_customer)
+        payload = self._customer_payload(source_customer, php_setting_map)
         if existing:
             customer_id = as_int(pick(existing, "customerid", "id", default=0))
             if not customer_id:
@@ -262,6 +265,7 @@ class MigratorCore:
         add_payload = {
             **{key: value for key, value in payload.items() if key not in {"deactivated", "theme"}},
             "new_loginname": str(pick(source_customer, "loginname", "login", default="")),
+            "new_customer_password": str(pick(source_customer, "new_customer_password", default="")),
         }
         try:
             data = self.target.call("Customers.add", add_payload)
@@ -772,11 +776,13 @@ class MigratorCore:
         target_customer_id: int,
         dir_protections: list[dict[str, Any]],
         customer_login: str,
+        target_login: str | None = None,
     ) -> None:
+        target_login = target_login or customer_login
         target_rows = self.target.list_dir_protections(customerid=target_customer_id)
         target_by_key = {
             (
-                self._relative_customer_path(str(pick(row, "path", default="")), customer_login).lower(),
+                self._relative_customer_path(str(pick(row, "path", default="")), target_login).lower(),
                 str(pick(row, "username", default="")).strip().lower(),
             ): str(pick(row, "path", default="")).strip()
             for row in target_rows
@@ -849,9 +855,10 @@ class MigratorCore:
         mailboxes: list[dict[str, Any]],
         dir_protections: list[dict[str, Any]],
         customer_login: str,
+        target_login: str | None = None,
     ) -> None:
         self._sync_customer_password_hash(source_customer, target_customer_id)
         self._sync_customer_2fa_settings(source_customer, target_customer_id)
         self._sync_ftp_password_hashes(target_customer_id, ftp_accounts)
         self._sync_mail_password_hashes(target_customer_id, mailboxes)
-        self._sync_dir_protection_password_hashes(target_customer_id, dir_protections, customer_login)
+        self._sync_dir_protection_password_hashes(target_customer_id, dir_protections, customer_login, target_login)

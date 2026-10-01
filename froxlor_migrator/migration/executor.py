@@ -54,7 +54,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             return MigrationContext(target_customer_id=target_customer_id, source_to_target_db={})
 
         _status("Synchronizing customer")
-        target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer)
+        target_customer_id = self._ensure_target_customer(selection.customer, selection.target_customer, selection.php_setting_map)
         _advance("Customer synchronized")
         customer_login = str(pick(selection.customer, "loginname", "login", default="")).strip()
         _status("Preparing IP mapping")
@@ -64,6 +64,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         target_customer_login = None
         if selection.target_customer:
             target_customer_login = self._customer_login(selection.target_customer)
+        target_login = target_customer_login or customer_login
 
         _status("Synchronizing domains")
         self._ensure_domains(
@@ -73,6 +74,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             selection.ip_mapping,
             ip_value_mapping,
             customer_login,
+            target_login,
         )
         _advance("Domains synchronized")
         _status("Synchronizing domain redirects")
@@ -87,7 +89,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             self._migrate_domain_certificates(selection.domains)
             _advance("Certificates synchronized")
         _status("Synchronizing FTP accounts")
-        self._ensure_ftp_accounts(target_customer_id, selection.ftp_accounts, customer_login)
+        self._ensure_ftp_accounts(target_customer_id, selection.ftp_accounts, customer_login, target_login)
         _advance("FTP accounts synchronized")
         _status("Synchronizing SSH keys")
         self._ensure_ssh_keys(target_customer_id, selection.ssh_keys)
@@ -96,10 +98,10 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         self._ensure_data_dumps(target_customer_id, selection.data_dumps)
         _advance("Data dumps synchronized")
         _status("Synchronizing directory options")
-        self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login)
+        self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login, target_login)
         _advance("Directory options synchronized")
         _status("Synchronizing directory protections")
-        self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login)
+        self._ensure_dir_protections(target_customer_id, selection.dir_protections, customer_login, target_login)
         _advance("Directory protections synchronized")
         if selection.include_domain_zones:
             _status("Synchronizing domain zones")
@@ -173,16 +175,17 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                 selection.mailboxes,
                 selection.dir_protections,
                 customer_login,
+                target_login,
             )
             _advance("Password hashes synchronized")
 
         if selection.include_files:
             for domain in selection.domains:
                 source_docroot = self._resolve_source_docroot(domain, customer_login)
-                target_docroot = self._resolve_target_docroot(domain, customer_login, source_docroot)
+                target_docroot = self._resolve_target_docroot(domain, customer_login, target_login, source_docroot)
                 _status(f"Transferring domain data: {self._domain_name(domain)}")
                 self.runner.transfer_files(source_docroot, target_docroot)
-                self._fix_transferred_docroot_ownership(target_docroot, target_customer_login or customer_login)
+                self._fix_transferred_docroot_ownership(target_docroot, target_login)
                 _advance(f"Files transferred: {self._domain_name(domain)}")
 
         if selection.include_mail and selection.mailboxes:

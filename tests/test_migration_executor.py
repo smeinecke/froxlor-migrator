@@ -44,7 +44,7 @@ class DummyMigrator(Migrator):
         super().__init__(config, source, target, self.runner)
 
         # Replace complex operations with no-ops to keep execution focused on flow.
-        self._ensure_target_customer = lambda customer, target_customer=None: 42
+        self._ensure_target_customer = lambda customer, target_customer=None, php_setting_map=None: 42
         self._build_ip_value_mapping = lambda domains, ip_mapping: {}
         self._ensure_domains = lambda *args, **kwargs: None
         self._sync_domain_redirects = lambda *args, **kwargs: None

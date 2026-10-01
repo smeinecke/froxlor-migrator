@@ -260,7 +260,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
     def test_ensure_target_customer_updates_existing_customer(self) -> None:
         existing = {"loginname": "bob", "customerid": 42}
         self.core.target.list_customers.return_value = [existing]
-        self.core._customer_payload = lambda src: {"email": "x"}
+        self.core._customer_payload = lambda src, php_setting_map=None: {"email": "x"}
 
         called: dict[str, object] = {}
 
@@ -275,7 +275,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.assertEqual("Customers.update", called["method"])
 
     def test_ensure_target_customer_creates_when_missing_and_handles_api_error(self) -> None:
-        self.core._customer_payload = lambda src: {"email": "x"}
+        self.core._customer_payload = lambda src, php_setting_map=None: {"email": "x"}
 
         def failing_call(method: str, payload: dict[str, object]):
             raise FroxlorApiError("boom")
@@ -494,7 +494,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
 
     def test_ensure_target_customer_creates_new_customer_successfully(self) -> None:
         self.core.target.list_customers.return_value = []
-        self.core._customer_payload = lambda src: {"email": "x"}
+        self.core._customer_payload = lambda src, php_setting_map=None: {"email": "x"}
 
         def add_call(method: str, payload: dict[str, object]):
             return {"customerid": 123}
@@ -613,24 +613,25 @@ class MigratorCoreMoreTests(unittest.TestCase):
                 "mysqls_ul": False,
                 "createstdsubdomain": True,
                 "phpenabled": True,
-                "allowed_phpconfigs": [2, 3],
+                "allowed_phpconfigs": [20, 30],
                 "perlenabled": True,
                 "dnsenabled": False,
                 "logviewenabled": True,
                 "store_defaultindex": False,
-                "hosting_plan_id": 7,
                 "new_customer_password": "pw123",
-                "allowed_mysqlserver": [9],
                 "new_loginname": "bob",
             }
             for k, v in expected.items():
                 self.assertIn(k, payload)
                 self.assertEqual(v, payload[k])
+            # Source-only identifiers must not leak into the target payload.
+            for k in ("hosting_plan_id", "allowed_mysqlserver", "adminid", "alias"):
+                self.assertNotIn(k, payload)
 
             return {"customerid": 123}
 
         self.core.target.call = add_call
-        cid = self.core._ensure_target_customer(source)
+        cid = self.core._ensure_target_customer(source, None, {2: 20, 3: 30})
         self.assertEqual(123, cid)
 
 
