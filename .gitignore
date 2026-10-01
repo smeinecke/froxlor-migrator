@@ -15,3 +15,5 @@ __pycache__/
 /config.toml
 /coverage.xml
 /.coverage
+# mutmut mutation testing artifacts
+mutants/
