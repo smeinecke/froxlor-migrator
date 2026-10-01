@@ -217,9 +217,7 @@ class RunAppTests(unittest.TestCase):
 
             commands = Commands()
 
-        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch.object(
-            tui_module, "FroxlorClient", DummyClient
-        ):
+        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch.object(tui_module, "FroxlorClient", DummyClient):
             sys_argv = sys.argv
             try:
                 sys.argv = [

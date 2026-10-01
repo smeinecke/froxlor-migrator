@@ -75,10 +75,7 @@ class MigratorDomainOps:
             # does not conflict, so ON DUPLICATE KEY accumulates stale rows.
             # Froxlor's own updateRedirectOfDomain deletes then re-inserts.
             name_list = ", ".join(self._sql_utf8_literal(name) for name in domain_names)
-            statements.append(
-                "DELETE FROM domain_redirect_codes WHERE did IN "
-                f"(SELECT id FROM panel_domains WHERE domain IN ({name_list}));"
-            )
+            statements.append(f"DELETE FROM domain_redirect_codes WHERE did IN (SELECT id FROM panel_domains WHERE domain IN ({name_list}));")
         for domain_name, alias_name, redirect_code in redirects:
             statements.append(
                 "UPDATE panel_domains d "
