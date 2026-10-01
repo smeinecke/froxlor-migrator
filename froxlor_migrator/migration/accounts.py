@@ -18,6 +18,7 @@ class MigratorAccountOps:
 
         def _mailbox_address(self, mailbox: ResourceRow) -> str: ...
         def _relative_customer_path(self, path: str, customer_login: str) -> str: ...
+        def _debug(self, message: str, **payload: Any) -> None: ...
         def _exec_target_panel_sql(self, sql: str) -> None: ...
         def _sql_utf8_literal(self, value: str) -> str: ...
 
@@ -127,7 +128,10 @@ class MigratorAccountOps:
                 if marker in homedir:
                     ftp_path = homedir.split(marker, 1)[1].strip("/")
             if not ftp_path:
-                ftp_path = target_login
+                # Ftps.listing only exposes the absolute homedir; an FTP account
+                # pointing at the customer root needs "/" (docroot), not a
+                # nested docroot/<login> directory.
+                ftp_path = "/"
             payload = {
                 "path": ftp_path,
                 "ftp_description": str(pick(row, "description", "ftp_description", default="")),
@@ -205,28 +209,40 @@ class MigratorAccountOps:
         target_rows = self.target.list_data_dumps(customerid=target_customer_id)
         existing = {data_dump_key(row) for row in target_rows}
         for row in data_dumps:
-            path = str(pick(row, "path", default="")).strip()
+            # DataDump.listing returns panel_tasks rows; the job config is the
+            # decoded JSON in `data`. `destdir` is absolute while DataDump.add
+            # expects a path relative to the customer documentroot.
+            data = row.get("data")
+            if not isinstance(data, dict):
+                data = {}
+            destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
+            loginname = str(data.get("loginname") or "").strip()
+            marker = f"/{loginname.strip('/')}/"
+            if loginname and marker in destdir:
+                path = destdir.split(marker, 1)[1].strip("/")
+            else:
+                path = destdir.strip("/")
             if not path:
                 continue
             payload = {
                 "customerid": target_customer_id,
                 "path": path,
-                "pgp_public_key": str(pick(row, "pgp_public_key", default="")).strip(),
-                "dump_dbs": as_bool(pick(row, "dump_dbs", default=0), default=False),
-                "dump_mail": as_bool(pick(row, "dump_mail", default=0), default=False),
-                "dump_web": as_bool(pick(row, "dump_web", default=0), default=False),
+                "pgp_public_key": str(data.get("pgp_public_key") or pick(row, "pgp_public_key", default="")).strip(),
+                "dump_dbs": as_bool(data.get("dump_dbs", pick(row, "dump_dbs", default=0)), default=False),
+                "dump_mail": as_bool(data.get("dump_mail", pick(row, "dump_mail", default=0)), default=False),
+                "dump_web": as_bool(data.get("dump_web", pick(row, "dump_web", default=0)), default=False),
             }
-            key = data_dump_key(payload)
-            if key in existing:
+            if data_dump_key(row) in existing:
                 continue
             try:
                 self.target.call("DataDump.add", payload)
             except Exception as exc:
                 message = str(exc).lower()
                 if "405" in message or "cannot access this resource" in message:
+                    self._debug(f"DataDump.add unavailable; skipped data-dump for {destdir}", destdir=destdir)
                     continue
                 raise
-            existing.add(key)
+            existing.add(data_dump_key(row))
 
     def _ensure_dir_options(
         self,

@@ -36,7 +36,22 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         self.assertEqual(("/path", "user"), _dir_protection_name({"path": "/Path", "username": "User"}))
         self.assertEqual("/path", _dir_option_name({"path": "/Path"}))
         self.assertEqual(("user", "key"), ssh_key_identity({"username": "User", "ssh_pubkey": "key"}))
-        self.assertEqual(("/tmp", 1, 2, 3, "k"), data_dump_key({"path": "/tmp", "dump_dbs": 1, "dump_mail": 2, "dump_web": 3, "pgp_public_key": "k"}))
+        self.assertEqual(("tmp", 1, 2, 3, "k"), data_dump_key({"path": "/tmp", "dump_dbs": 1, "dump_mail": 2, "dump_web": 3, "pgp_public_key": "k"}))
+        # DataDump.listing rows nest the job config under `data`; absolute
+        # destdir is relativized against the customer login dir.
+        task_row = {
+            "type": "20",
+            "data": {
+                "customerid": 1,
+                "loginname": "cust",
+                "destdir": "/srv/customers/cust/backups",
+                "dump_dbs": "1",
+                "dump_mail": "0",
+                "dump_web": "1",
+                "pgp_public_key": "k",
+            },
+        }
+        self.assertEqual(("backups", 1, 0, 1, "k"), data_dump_key(task_row))
         self.assertEqual("ftpuser", ftp_username({"username": "FTPUser"}))
 
     def test_docroot_in_any_root(self) -> None:
@@ -238,9 +253,12 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         # Empty source path + homedir under the customer dir → homedir suffix.
         source = {"path": "", "homedir": "/var/www/srcuser/web/site"}
         self.assertEqual("web/site", _expected_ftp_path(source, "srcuser", "dstuser"))
-        # Empty path + homedir outside customer dir → target login fallback.
+        # Empty path + homedir outside customer dir → "/" (customer docroot).
         source = {"path": "", "homedir": "/home/other"}
-        self.assertEqual("dstuser", _expected_ftp_path(source, "srcuser", "dstuser"))
+        self.assertEqual("/", _expected_ftp_path(source, "srcuser", "dstuser"))
+        # Main-account homedir == customer dir → "/" (no nested login subdir).
+        source = {"path": "", "homedir": "/var/www/srcuser/"}
+        self.assertEqual("/", _expected_ftp_path(source, "srcuser", "dstuser"))
         # Explicit path is kept (stripped).
         source = {"path": "/web/custom/", "homedir": "/var/www/srcuser/"}
         self.assertEqual("web/custom", _expected_ftp_path(source, "srcuser", "dstuser"))
@@ -249,6 +267,11 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         source = {"path": "", "homedir": "/var/www/user/web", "password": "h", "description": "", "shell": "/bin/false"}
         target = {"path": "web", "password": "h", "description": "", "shell": "/bin/false"}
         self.assertEqual([], _compare_ftp(source, target, source_login="user", target_login="user"))
+        # Ftps.listing returns no `path` field — derive it from homedir.
+        target = {"homedir": "/var/www/user/web", "password": "h", "description": "", "shell": "/bin/false"}
+        self.assertEqual([], _compare_ftp(source, target, source_login="user", target_login="user"))
+        target = {"homedir": "/var/www/user/other", "password": "h", "description": "", "shell": "/bin/false"}
+        self.assertTrue(any("path" in e for e in _compare_ftp(source, target, source_login="user", target_login="user")))
 
     def test_compare_ftp_password_check_can_be_skipped(self) -> None:
         source = {"path": "web", "password": "src-hash"}

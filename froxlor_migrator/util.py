@@ -142,10 +142,20 @@ def ssh_key_identity(row: dict[str, Any]) -> tuple[str, str]:
 
 
 def data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
+    # DataDump.listing returns panel_tasks rows; the dump configuration is the
+    # decoded JSON in `data` (destdir, dump_*, pgp_public_key, loginname).
+    data = row.get("data")
+    if not isinstance(data, dict):
+        data = {}
+    destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
+    loginname = str(data.get("loginname") or pick(row, "loginname", default="")).strip()
+    marker = f"/{loginname.strip('/')}/"
+    if loginname and marker in destdir:
+        destdir = destdir.split(marker, 1)[1]
     return (
-        str(pick(row, "path", default="")).strip(),
-        as_int(pick(row, "dump_dbs", default=0)),
-        as_int(pick(row, "dump_mail", default=0)),
-        as_int(pick(row, "dump_web", default=0)),
-        str(pick(row, "pgp_public_key", default="")).strip(),
+        destdir.strip("/"),
+        as_int(data.get("dump_dbs") if "dump_dbs" in data else pick(row, "dump_dbs", default=0)),
+        as_int(data.get("dump_mail") if "dump_mail" in data else pick(row, "dump_mail", default=0)),
+        as_int(data.get("dump_web") if "dump_web" in data else pick(row, "dump_web", default=0)),
+        str(data.get("pgp_public_key") if data.get("pgp_public_key") is not None else pick(row, "pgp_public_key", default="")).strip(),
     )

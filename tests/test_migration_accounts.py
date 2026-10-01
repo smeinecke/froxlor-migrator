@@ -44,6 +44,9 @@ class StubOps(MigratorAccountOps):
     def __init__(self, target: StubTarget) -> None:
         self.target = target
 
+    def _debug(self, message: str, **payload: object) -> None:
+        pass
+
 
 class MigratorAccountOpsTests(unittest.TestCase):
     def test_ensure_email_forwarders_adds_missing(self) -> None:

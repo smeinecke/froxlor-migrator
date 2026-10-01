@@ -403,17 +403,20 @@ def _compare_subdomain(
     return errors
 
 
+def _relative_ftp_path(row: dict[str, Any], customer_login: str) -> str:
+    """Docroot-relative FTP path; '/' when the homedir is the customer root."""
+    ftp_path = str(pick(row, "path", default="")).strip().strip("/")
+    if not ftp_path:
+        homedir = str(pick(row, "homedir", default="")).strip()
+        marker = f"/{customer_login.strip('/')}/"
+        if customer_login and marker in homedir:
+            ftp_path = homedir.split(marker, 1)[1].strip("/")
+    return ftp_path or "/"
+
+
 def _expected_ftp_path(source_row: dict[str, Any], source_login: str, target_login: str) -> str:
     """Mirror the migrator's FTP path derivation for parity checks."""
-    ftp_path = str(pick(source_row, "path", default="")).strip().strip("/")
-    if not ftp_path:
-        homedir = str(pick(source_row, "homedir", default="")).strip()
-        marker = f"/{source_login.strip('/')}/"
-        if marker in homedir:
-            ftp_path = homedir.split(marker, 1)[1].strip("/")
-    if not ftp_path:
-        ftp_path = target_login
-    return ftp_path
+    return _relative_ftp_path(source_row, source_login)
 
 
 def _compare_ftp(
@@ -428,7 +431,7 @@ def _compare_ftp(
         (
             "path",
             _expected_ftp_path(source_row, source_login, target_login),
-            str(pick(target_row, "path", default="")).strip().strip("/"),
+            _relative_ftp_path(target_row, target_login),
         ),
         (
             "description",
