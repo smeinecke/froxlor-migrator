@@ -290,7 +290,8 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.core._customer_payload = lambda src, php_setting_map=None: {"email": "x"}
 
         def failing_call(method: str, payload: dict[str, object]):
-            raise FroxlorApiError("boom")
+            if method == "Customers.add":
+                raise FroxlorApiError("boom")
 
         self.core.target.call = failing_call
         # First no customer exists, but after API error it appears

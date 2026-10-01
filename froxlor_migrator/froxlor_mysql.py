@@ -64,21 +64,21 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
 
     if section == "sql_root":
         indexed_pairs: dict[str, dict[str, str]] = {}
-        for index, key, _quote, raw_value in re.findall(
+        for index, key, quote, raw_value in re.findall(
             rf"\$sql_root\s*\[\s*(\d+)\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
             content,
         ):
-            indexed_pairs.setdefault(index, {})[key] = _php_unescape(raw_value)
+            indexed_pairs.setdefault(index, {})[key] = _php_unescape(raw_value, double_quoted=(quote == '"'))
         if indexed_pairs:
             candidates = [item for item in indexed_pairs.values() if item.get("user", "").strip()]
             if candidates:
                 pairs = max(candidates, key=_credential_score)
     else:
-        for key, _quote, raw_value in re.findall(
+        for key, quote, raw_value in re.findall(
             rf"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
             content,
         ):
-            pairs[key] = _php_unescape(raw_value)
+            pairs[key] = _php_unescape(raw_value, double_quoted=(quote == '"'))
 
     if not pairs:
         body = _extract_php_array_body(content, section)

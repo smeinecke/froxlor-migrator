@@ -103,7 +103,7 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
         self._ensure_ssh_keys(target_customer_id, selection.ssh_keys)
         _advance("SSH keys synchronized")
         _status("Synchronizing data dumps")
-        self._ensure_data_dumps(target_customer_id, selection.data_dumps)
+        self._ensure_data_dumps(target_customer_id, selection.data_dumps, customer_login)
         _advance("Data dumps synchronized")
         _status("Synchronizing directory options")
         self._ensure_dir_options(target_customer_id, selection.dir_options, customer_login, target_login)
@@ -219,7 +219,10 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
                     sub_path = str(pick(sub, "path", default="")).strip()
                     if not sub_path:
                         continue
-                    relative_sub_path = relative_customer_path(sub_path, customer_login) or sub_path.lstrip("/")
+                    # "" means the path *is* the customer root — don't fall
+                    # back to the raw path or the absolute source path would
+                    # be nested under the target docroot.
+                    relative_sub_path = relative_customer_path(sub_path, customer_login)
                     source_path = self._resolve_source_docroot({**sub, "documentroot": sub_path}, customer_login)
                     # The target record always stores the path relative to the
                     # target customer's documentroot, so transfer under the

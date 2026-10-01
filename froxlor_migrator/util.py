@@ -164,14 +164,14 @@ def ssh_key_identity(row: dict[str, Any]) -> tuple[str, str]:
     return (ftp_username(row), str(pick(row, "ssh_pubkey", default="")).strip())
 
 
-def data_dump_key(row: dict[str, Any]) -> tuple[str, int, int, int, str]:
+def data_dump_key(row: dict[str, Any], login_fallback: str = "") -> tuple[str, int, int, int, str]:
     # DataDump.listing returns panel_tasks rows; the dump configuration is the
     # decoded JSON in `data` (destdir, dump_*, pgp_public_key, loginname).
     data = row.get("data")
     if not isinstance(data, dict):
         data = {}
     destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
-    loginname = str(data.get("loginname") or pick(row, "loginname", default="")).strip()
+    loginname = str(data.get("loginname") or pick(row, "loginname", default="")).strip() or login_fallback
     if loginname:
         destdir = relative_customer_path(destdir, loginname)
     return (

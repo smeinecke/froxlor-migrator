@@ -68,7 +68,6 @@ class MigratorCore:
                 return candidate
         return ""
 
-
     def __init__(
         self,
         config: AppConfig,
@@ -263,6 +262,16 @@ class MigratorCore:
             if existing:
                 resolved_id = as_int(pick(existing, "customerid", "id", default=0))
                 if resolved_id:
+                    # add() failed because the customer already exists — still
+                    # apply the settings update instead of silently skipping it.
+                    self.target.call(
+                        "Customers.update",
+                        {
+                            "id": resolved_id,
+                            "loginname": str(pick(existing, "loginname", "login", default="")),
+                            **payload,
+                        },
+                    )
                     return resolved_id
             raise MigrationError(f"Failed to create target customer via API: {exc}") from exc
         customer_id = as_int(pick(data or {}, "customerid", "id", default=0))
@@ -619,9 +628,7 @@ class MigratorCore:
 
     def _load_source_dkim_private_key(self, domain_name: str) -> str:
         # Domains.listing/get strip dkim_privkey — it only exists in the panel DB.
-        rows = self._run_source_panel_query(
-            f"SELECT dkim_privkey FROM panel_domains WHERE domain={self._sql_utf8_literal(domain_name)} LIMIT 1;"
-        )
+        rows = self._run_source_panel_query(f"SELECT dkim_privkey FROM panel_domains WHERE domain={self._sql_utf8_literal(domain_name)} LIMIT 1;")
         if not rows or not rows[0]:
             return ""
         return str(rows[0][0]).strip()
@@ -691,9 +698,7 @@ class MigratorCore:
             clauses.append(f"customerid={customer_id}")
         if not clauses:
             return None
-        rows = self._run_source_panel_query(
-            f"SELECT password, type_2fa, data_2fa FROM panel_customers WHERE {' OR '.join(clauses)} LIMIT 1;"
-        )
+        rows = self._run_source_panel_query(f"SELECT password, type_2fa, data_2fa FROM panel_customers WHERE {' OR '.join(clauses)} LIMIT 1;")
         if not rows or not rows[0]:
             return None
         row = rows[0]
@@ -726,9 +731,7 @@ class MigratorCore:
             # type_2fa>0 without its secret yields a TOTP-enabled account that
             # can never authenticate — refuse instead of corrupting it.
             if as_int(pick(source_customer, "type_2fa", default=0)) > 0:
-                raise MigrationError(
-                    "Source customer has 2FA enabled but the panel DB row could not be read; refusing to sync a secretless 2FA flag"
-                )
+                raise MigrationError("Source customer has 2FA enabled but the panel DB row could not be read; refusing to sync a secretless 2FA flag")
             self._debug("no panel_customers row found for source customer; falling back to API fields for 2FA")
             type_2fa = as_int(pick(source_customer, "type_2fa", default=0))
             data_2fa = str(pick(source_customer, "data_2fa", default="")).strip()

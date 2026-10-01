@@ -94,14 +94,9 @@ class MigratorAccountOps:
             None,
         )
         if target_row is None or not self._mailbox_has_account(target_row):
-            raise MigrationError(
-                f"Cannot add sender alias {allowed_sender} for {emailaddr}: "
-                "target mailbox does not exist or has no mail account"
-            )
+            raise MigrationError(f"Cannot add sender alias {allowed_sender} for {emailaddr}: target mailbox does not exist or has no mail account")
         self._exec_target_panel_sql(
-            "INSERT IGNORE INTO mail_sender_aliases SET "
-            f"email={self._sql_utf8_literal(emailaddr)}, "
-            f"allowed_sender={self._sql_utf8_literal(allowed_sender)};"
+            f"INSERT IGNORE INTO mail_sender_aliases SET email={self._sql_utf8_literal(emailaddr)}, allowed_sender={self._sql_utf8_literal(allowed_sender)};"
         )
 
     def _ensure_ftp_accounts(
@@ -200,7 +195,7 @@ class MigratorAccountOps:
             refreshed = self.target.list_ssh_keys(customerid=target_customer_id)
             existing = {ssh_key_identity(item): item for item in refreshed}
 
-    def _ensure_data_dumps(self, target_customer_id: int, data_dumps: list[dict[str, Any]]) -> None:
+    def _ensure_data_dumps(self, target_customer_id: int, data_dumps: list[dict[str, Any]], customer_login: str = "") -> None:
         if not data_dumps:
             return
         target_rows = self.target.list_data_dumps(customerid=target_customer_id)
@@ -213,8 +208,13 @@ class MigratorAccountOps:
             if not isinstance(data, dict):
                 data = {}
             destdir = str(data.get("destdir") or pick(row, "path", default="")).strip()
-            loginname = str(data.get("loginname") or "").strip()
-            path = relative_customer_path(destdir, loginname) if loginname else destdir.strip("/")
+            loginname = str(data.get("loginname") or "").strip() or customer_login
+            if not loginname:
+                # Without an owner login an absolute destdir cannot be
+                # relativized — stripping "/" would nest the whole source path.
+                self._debug(f"data dump has no loginname; skipped: {destdir}", destdir=destdir)
+                continue
+            path = relative_customer_path(destdir, loginname)
             if not path:
                 continue
             payload = {
@@ -225,7 +225,7 @@ class MigratorAccountOps:
                 "dump_mail": as_bool(data.get("dump_mail", pick(row, "dump_mail", default=0)), default=False),
                 "dump_web": as_bool(data.get("dump_web", pick(row, "dump_web", default=0)), default=False),
             }
-            if data_dump_key(row) in existing:
+            if data_dump_key(row, loginname) in existing:
                 continue
             try:
                 self.target.call("DataDump.add", payload)
@@ -235,7 +235,7 @@ class MigratorAccountOps:
                     self._debug(f"DataDump.add unavailable; skipped data-dump for {destdir}", destdir=destdir)
                     continue
                 raise
-            existing.add(data_dump_key(row))
+            existing.add(data_dump_key(row, loginname))
 
     def _ensure_dir_options(
         self,
