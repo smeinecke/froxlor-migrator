@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from collections import deque
 from pathlib import Path
 from unittest.mock import patch
 
@@ -27,23 +28,43 @@ class SshClientStub:
 
     def exec_command(self, command: str):
         class Channel:
-            def recv_exit_status(self_inner):
+            def __init__(self):
+                self._out = deque([b"out"])
+                self._err = deque([b"err"])
+                self.closed = False
+
+            def recv_ready(self):
+                return bool(self._out)
+
+            def recv(self, _size):
+                return self._out.popleft()
+
+            def recv_stderr_ready(self):
+                return bool(self._err)
+
+            def recv_stderr(self, _size):
+                return self._err.popleft()
+
+            def exit_status_ready(self):
+                return True
+
+            def recv_exit_status(self):
                 return 0
+
+            def close(self):
+                self.closed = True
 
         class File:
             def __init__(self):
                 self.channel = Channel()
 
-            def read(self):
-                return b"out"
-
-            def decode(self, *_):
-                return "out"
-
             def close(self):
                 pass
 
-        return (File(), File(), File())
+        files = [File(), File(), File()]
+        files[1].channel = files[0].channel
+        files[2].channel = files[0].channel
+        return tuple(files)
 
     def open_sftp(self):
         class FileHandle:
@@ -135,6 +156,7 @@ class SshDriverTests(unittest.TestCase):
         result = driver.run("echo hi")
         self.assertEqual(0, result.returncode)
         self.assertEqual("out", result.stdout)
+        self.assertEqual("err", result.stderr)
 
         self.assertEqual("hello", driver.read_file("/tmp/dummy"))
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shlex
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -75,14 +76,40 @@ class SshDriver:
         self._client = client
         return client
 
-    def run(self, command: str) -> SshCommandResult:
+    def run(self, command: str, timeout: float | None = None) -> SshCommandResult:
         client = self._connect()
         logger.debug("SSH command start: %s", command)
-        stdin, stdout, stderr = client.exec_command(command)
+        stdin, stdout, _stderr = client.exec_command(command)
         stdin.close()
-        out = stdout.read().decode("utf-8", errors="ignore")
-        err = stderr.read().decode("utf-8", errors="ignore")
-        code = stdout.channel.recv_exit_status()
+        channel = stdout.channel
+
+        # Drain stdout and stderr concurrently: they share a single channel
+        # window, so a remote process filling the stderr buffer while we block
+        # on stdout.read() deadlocks the channel.
+        out_parts: list[bytes] = []
+        err_parts: list[bytes] = []
+        deadline = time.monotonic() + timeout if timeout else None
+        while not channel.exit_status_ready():
+            while channel.recv_ready():
+                out_parts.append(channel.recv(65536))
+            while channel.recv_stderr_ready():
+                err_parts.append(channel.recv_stderr(65536))
+            if deadline is not None and time.monotonic() > deadline:
+                channel.close()
+                raise TimeoutError(f"SSH command timed out after {timeout}s: {command[:200]}")
+            time.sleep(0.01)
+        # The exit status can arrive while the last packets are still in
+        # flight — keep draining until both buffers are empty.
+        while channel.recv_ready() or channel.recv_stderr_ready():
+            while channel.recv_ready():
+                out_parts.append(channel.recv(65536))
+            while channel.recv_stderr_ready():
+                err_parts.append(channel.recv_stderr(65536))
+            time.sleep(0.01)
+        code = channel.recv_exit_status()
+        channel.close()
+        out = b"".join(out_parts).decode("utf-8", errors="ignore")
+        err = b"".join(err_parts).decode("utf-8", errors="ignore")
         logger.debug("SSH command result: returncode=%s command=%s", code, command)
         return SshCommandResult(returncode=code, stdout=out, stderr=err)
 
