@@ -110,11 +110,31 @@ class MigratorDomainOpsTests(unittest.TestCase):
         self.assertFalse(hasattr(ops, "ran"))
 
     def test_fix_transferred_docroot_ownership_chowns_to_target_login(self) -> None:
+        import types as _t
+
         ops = DummyDomainOps()
         ops.runner.dry_run = False
-        ops.runner.run_remote = lambda cmd, check=True, sensitive=False: setattr(ops, "ran", cmd)
+        ops.runner.run_remote = lambda cmd, check=True, sensitive=False: setattr(ops, "ran", cmd) or _t.SimpleNamespace(returncode=0)
         ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
         self.assertIn("sudo chown -R tgt:tgt /tmp/foo", ops.ran)
+
+    def test_fix_transferred_docroot_ownership_skips_when_system_user_missing(self) -> None:
+        import types as _t
+
+        ops = DummyDomainOps()
+        ops.runner.dry_run = False
+        calls: list[str] = []
+        warnings: list[str] = []
+
+        def run_remote(cmd, check=True, sensitive=False):
+            calls.append(cmd)
+            return _t.SimpleNamespace(returncode=1 if cmd.startswith("id -u") else 0)
+
+        ops.runner.run_remote = run_remote
+        ops._debug = lambda msg, **kw: warnings.append(msg)
+        ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
+        self.assertFalse(any("chown" in c for c in calls))
+        self.assertTrue(any("not found" in w for w in warnings))
 
     def test_ensure_domains_updates_existing_domain(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
