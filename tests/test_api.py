@@ -387,6 +387,38 @@ class ApiClientTests(unittest.TestCase):
         client = FailingStub()
         self.assertEqual([], client.list_email_senders(emailaddr="a@example.com"))
 
+    def test_call_tolerates_non_numeric_status(self) -> None:
+        client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
+
+        class DummyResponse:
+            status_code = 200
+            text = "{}"
+
+            def json(self):
+                return {"status": "ok", "data": {"x": 1}}
+
+        with patch("froxlor_migrator.api.requests.post", return_value=DummyResponse()):
+            self.assertEqual({"x": 1}, client.call("Customers.get"))
+
+    def test_filter_customer_rows_tolerates_malformed_id(self) -> None:
+        client = StubClient()
+        rows = [
+            {"customerid": "bogus", "loginname": "alpha"},
+            {"customerid": 10, "loginname": "alpha"},
+        ]
+        result = client._filter_customer_rows(rows, 10, None)
+        self.assertEqual([{"customerid": 10, "loginname": "alpha"}], result)
+
+    def test_list_domain_zones_logs_warning_on_error(self) -> None:
+        class FailingStub(StubClient):
+            def call(self, command: str, params: dict[str, Any] | None = None) -> Any:
+                raise FroxlorApiError("boom")
+
+        client = FailingStub()
+        with self.assertLogs("froxlor_migrator.api", level="WARNING") as captured:
+            self.assertEqual([], client.list_domain_zones(domainname="x.example"))
+        self.assertTrue(any("DomainZones.listing" in line for line in captured.output))
+
 
 if __name__ == "__main__":
     unittest.main()

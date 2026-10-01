@@ -11,6 +11,8 @@ import requests
 from requests.exceptions import JSONDecodeError as RequestsJSONDecodeError
 from requests.exceptions import RequestException
 
+from .util import as_int
+
 
 class FroxlorApiError(RuntimeError):
     pass
@@ -24,7 +26,7 @@ _SENSITIVE_PARAM_MARKERS = ("password", "passwd", "secret", "ssl_key", "private_
 
 def _is_idempotent_command(command: str) -> bool:
     lowered = command.lower()
-    return lowered.endswith(".listing") or ".list" in lowered or ".get" in lowered
+    return lowered.endswith((".listing", ".list", ".get"))
 
 
 def _redact_params(params: Any) -> Any:
@@ -114,7 +116,7 @@ class FroxlorClient:
             logger.debug("Froxlor API non-JSON response: command=%s body=%s", command, snippet)
             raise FroxlorApiError(f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}") from exc
 
-        if data.get("status") and int(data.get("status", 200)) >= 400:
+        if data.get("status") and as_int(data.get("status"), default=200) >= 400:
             logger.debug(
                 "Froxlor API semantic error: command=%s status=%s message=%s",
                 command,
@@ -138,7 +140,7 @@ class FroxlorClient:
             data = self.call(command, merged)
             if isinstance(data, dict) and "list" in data:
                 items = data.get("list") or []
-                count = int(data.get("count", len(items)))
+                count = as_int(data.get("count"), default=len(items))
             elif isinstance(data, list):
                 items = data
                 count = len(items)
@@ -191,7 +193,8 @@ class FroxlorClient:
             params["loginname"] = loginname
         try:
             return self.listing("DataDump.listing", params)
-        except FroxlorApiError:
+        except FroxlorApiError as exc:
+            logger.warning("DataDump.listing failed; data dumps will not be migrated: %s", exc)
             return []
 
     def list_email_forwarders(
@@ -209,7 +212,8 @@ class FroxlorClient:
                 params["id"] = email_id
             try:
                 raw_rows = self._rows_from_payload(self.call("EmailForwarders.listing", params))
-            except FroxlorApiError:
+            except FroxlorApiError as exc:
+                logger.warning("EmailForwarders.listing failed for %s: %s", emailaddr or email_id, exc)
                 return []
             mailbox_email = (emailaddr or "").strip().lower()
             filtered_rows: list[dict[str, Any]] = []
@@ -232,7 +236,8 @@ class FroxlorClient:
                 continue
             try:
                 chunk = self._rows_from_payload(self.call("EmailForwarders.listing", {"emailaddr": mailbox_email}))
-            except FroxlorApiError:
+            except FroxlorApiError as exc:
+                logger.warning("EmailForwarders.listing failed for mailbox %s: %s", mailbox_email, exc)
                 chunk = []
             for item in chunk:
                 destination = str(item.get("destination") or item.get("address") or "").strip().lower()
@@ -261,7 +266,8 @@ class FroxlorClient:
                 params["id"] = email_id
             try:
                 return self._rows_from_payload(self.call("EmailSender.listing", params))
-            except FroxlorApiError:
+            except FroxlorApiError as exc:
+                logger.warning("EmailSender.listing failed for %s: %s", emailaddr or email_id, exc)
                 return []
 
         rows: list[dict[str, Any]] = []
@@ -271,7 +277,8 @@ class FroxlorClient:
                 continue
             try:
                 chunk = self._rows_from_payload(self.call("EmailSender.listing", {"emailaddr": mailbox_email}))
-            except FroxlorApiError:
+            except FroxlorApiError as exc:
+                logger.warning("EmailSender.listing failed for mailbox %s: %s", mailbox_email, exc)
                 chunk = []
             rows.extend(chunk)
         return self._filter_customer_rows(rows, customerid, loginname)
@@ -284,7 +291,8 @@ class FroxlorClient:
             params["id"] = domain_id
         try:
             return self.listing("DomainZones.listing", params)
-        except FroxlorApiError:
+        except FroxlorApiError as exc:
+            logger.warning("DomainZones.listing failed for %s: %s", domainname or domain_id, exc)
             return []
 
     def _filter_customer_rows(
@@ -305,7 +313,7 @@ class FroxlorClient:
             # listings (e.g. per-mailbox forwarders/senders) lack customerid but
             # are already scoped to the queried customer.
             if customerid is not None and row_customer_id not in (None, ""):
-                if int(row_customer_id or 0) != int(customerid):
+                if as_int(row_customer_id, default=-1) != as_int(customerid, default=-2):
                     continue
             if wanted_login and row_login and row_login != wanted_login:
                 continue
