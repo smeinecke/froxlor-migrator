@@ -185,7 +185,7 @@ class FroxlorClient:
     def list_ssh_keys(self, customerid: int | None = None, loginname: str | None = None) -> list[dict[str, Any]]:
         return self._filter_customer_rows(self.listing("SshKeys.listing"), customerid, loginname)
 
-    def list_data_dumps(self, customerid: int | None = None, loginname: str | None = None) -> list[dict[str, Any]]:
+    def list_data_dumps(self, customerid: int | None = None, loginname: str | None = None, strict: bool = False) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if customerid is not None:
             params["customerid"] = customerid
@@ -194,6 +194,8 @@ class FroxlorClient:
         try:
             return self.listing("DataDump.listing", params)
         except FroxlorApiError as exc:
+            if strict:
+                raise
             logger.warning("DataDump.listing failed; data dumps will not be migrated: %s", exc)
             return []
 
@@ -203,6 +205,7 @@ class FroxlorClient:
         loginname: str | None = None,
         emailaddr: str | None = None,
         email_id: int | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
         if emailaddr or email_id:
             params: dict[str, Any] = {}
@@ -213,6 +216,8 @@ class FroxlorClient:
             try:
                 raw_rows = self._rows_from_payload(self.call("EmailForwarders.listing", params))
             except FroxlorApiError as exc:
+                if strict:
+                    raise
                 logger.warning("EmailForwarders.listing failed for %s: %s", emailaddr or email_id, exc)
                 return []
             mailbox_email = (emailaddr or "").strip().lower()
@@ -237,6 +242,8 @@ class FroxlorClient:
             try:
                 chunk = self._rows_from_payload(self.call("EmailForwarders.listing", {"emailaddr": mailbox_email}))
             except FroxlorApiError as exc:
+                if strict:
+                    raise
                 logger.warning("EmailForwarders.listing failed for mailbox %s: %s", mailbox_email, exc)
                 chunk = []
             for item in chunk:
@@ -257,6 +264,7 @@ class FroxlorClient:
         loginname: str | None = None,
         emailaddr: str | None = None,
         email_id: int | None = None,
+        strict: bool = False,
     ) -> list[dict[str, Any]]:
         if emailaddr or email_id:
             params: dict[str, Any] = {}
@@ -267,6 +275,8 @@ class FroxlorClient:
             try:
                 return self._rows_from_payload(self.call("EmailSender.listing", params))
             except FroxlorApiError as exc:
+                if strict:
+                    raise
                 logger.warning("EmailSender.listing failed for %s: %s", emailaddr or email_id, exc)
                 return []
 
@@ -278,12 +288,19 @@ class FroxlorClient:
             try:
                 chunk = self._rows_from_payload(self.call("EmailSender.listing", {"emailaddr": mailbox_email}))
             except FroxlorApiError as exc:
+                if strict:
+                    raise
                 logger.warning("EmailSender.listing failed for mailbox %s: %s", mailbox_email, exc)
                 chunk = []
             rows.extend(chunk)
         return self._filter_customer_rows(rows, customerid, loginname)
 
-    def list_domain_zones(self, domainname: str | None = None, domain_id: int | None = None) -> list[dict[str, Any]]:
+    def list_domain_zones(
+        self,
+        domainname: str | None = None,
+        domain_id: int | None = None,
+        strict: bool = False,
+    ) -> list[dict[str, Any]]:
         params: dict[str, Any] = {}
         if domainname:
             params["domainname"] = domainname
@@ -292,6 +309,8 @@ class FroxlorClient:
         try:
             return self.listing("DomainZones.listing", params)
         except FroxlorApiError as exc:
+            if strict:
+                raise
             logger.warning("DomainZones.listing failed for %s: %s", domainname or domain_id, exc)
             return []
 

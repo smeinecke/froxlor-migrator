@@ -5,13 +5,16 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from froxlor_migrator.verify_migration import (
+    _compare_customer,
     _compare_domain,
+    _compare_ftp,
     _customer_warnings,
     _data_dump_key,
     _dir_option_name,
     _dir_protection_name,
     _docroot_in_any_root,
     _domain_name,
+    _expected_ftp_path,
     _expected_target_docroot,
     _ftp_name,
     _is_custom_zone_record,
@@ -229,6 +232,34 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         tcp_tunnel.assert_called_once_with(ssh.transport.return_value, "10.0.0.5", 3307)
         self.assertEqual({"host": "127.0.0.1", "port": 4407, "user": "root", "password": "secret"}, kwargs)
         ssh.close.assert_called_once()
+
+    def test_expected_ftp_path_mirrors_migrator_fallback(self) -> None:
+        # Empty source path + homedir under the customer dir → homedir suffix.
+        source = {"path": "", "homedir": "/var/www/srcuser/web/site"}
+        self.assertEqual("web/site", _expected_ftp_path(source, "srcuser", "dstuser"))
+        # Empty path + homedir outside customer dir → target login fallback.
+        source = {"path": "", "homedir": "/home/other"}
+        self.assertEqual("dstuser", _expected_ftp_path(source, "srcuser", "dstuser"))
+        # Explicit path is kept (stripped).
+        source = {"path": "/web/custom/", "homedir": "/var/www/srcuser/"}
+        self.assertEqual("web/custom", _expected_ftp_path(source, "srcuser", "dstuser"))
+
+    def test_compare_ftp_accepts_derived_target_path(self) -> None:
+        source = {"path": "", "homedir": "/var/www/user/web", "password": "h", "description": "", "shell": "/bin/false"}
+        target = {"path": "web", "password": "h", "description": "", "shell": "/bin/false"}
+        self.assertEqual([], _compare_ftp(source, target, source_login="user", target_login="user"))
+
+    def test_compare_ftp_password_check_can_be_skipped(self) -> None:
+        source = {"path": "web", "password": "src-hash"}
+        target = {"path": "web", "password": "different"}
+        self.assertTrue(_compare_ftp(source, target, check_password=True))
+        self.assertEqual([], _compare_ftp(source, target, check_password=False))
+
+    def test_compare_customer_password_check_can_be_skipped(self) -> None:
+        source = {"password": "src-hash", "type_2fa": 1, "data_2fa": "secret"}
+        target = {"password": "other", "type_2fa": 0, "data_2fa": ""}
+        self.assertTrue(_compare_customer(source, target, check_password=True))
+        self.assertEqual([], _compare_customer(source, target, check_password=False))
 
 
 if __name__ == "__main__":
