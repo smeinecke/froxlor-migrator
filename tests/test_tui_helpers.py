@@ -162,6 +162,10 @@ class TuiHelperTests(unittest.TestCase):
             tui_module._ip_view([{"id": 1, "ip": "1.2.3.4", "port": 123, "ssl": 1}]),
         )
         self.assertTrue(tui_module._domain_in_source_root({"documentroot": "/var/www/ex"}, "/var/www"))
+        # Relative and empty docroots resolve inside the customer homedir.
+        self.assertTrue(tui_module._domain_in_source_root({"documentroot": "htdocs/site"}, "/var/www"))
+        self.assertTrue(tui_module._domain_in_source_root({"documentroot": ""}, "/var/www"))
+        self.assertFalse(tui_module._domain_in_source_root({"documentroot": "/elsewhere/site"}, "/var/www"))
 
     def test_build_ip_map_non_interactive_returns_mapping_and_rows(self) -> None:
         class StubTarget:

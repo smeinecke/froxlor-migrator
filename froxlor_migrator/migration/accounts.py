@@ -222,7 +222,7 @@ class MigratorAccountOps:
             except Exception as exc:
                 message = str(exc).lower()
                 if "405" in message or "cannot access this resource" in message:
-                    return
+                    continue
                 raise
             existing.add(key)
 

@@ -440,6 +440,10 @@ def _ip_view(ip_rows: list[dict]) -> list[dict]:
 def _domain_in_source_root(domain: dict, source_root: str) -> bool:
     docroot = str(pick(domain, "documentroot", default="")).strip()
     root = source_root.rstrip("/")
+    if not docroot or not docroot.startswith("/"):
+        # Empty documentroot resolves to the customer homedir, and Froxlor may
+        # store documentroot relative to it - both are inside source_web_root.
+        return True
     return bool(docroot.startswith(root + "/") or docroot == root)
 
 
@@ -874,7 +878,7 @@ def run_app() -> None:
             )
             selected_databases = [x["_raw"] for x in selected_db_rows]
         else:
-            selected_databases = []
+            selected_databases = list(dbs) if args.non_interactive else []
             if not dbs:
                 console.print("[yellow]No databases found for this customer.[/yellow]")
 
@@ -942,7 +946,7 @@ def run_app() -> None:
             )
             selected_ftps = [x["_raw"] for x in selected_ftp_rows]
         else:
-            selected_ftps = []
+            selected_ftps = list(ftps) if args.non_interactive else []
             if not ftps:
                 console.print("[yellow]No FTP accounts found for this customer.[/yellow]")
         selected_dir_protections = dir_protections
@@ -970,7 +974,7 @@ def run_app() -> None:
 
     try:
         php_setting_map, source_selected_php_settings = _build_php_setting_map(
-            selected_domains,
+            selected_domains + selected_subdomains,
             source_php_settings,
             target_php_settings,
             preset_mapping=php_mapping_arg,
