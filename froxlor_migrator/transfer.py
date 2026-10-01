@@ -315,7 +315,7 @@ class TransferRunner:
         completed = self._ssh.run(command)
         if completed.stdout and not sensitive:
             print(completed.stdout, end="")
-        if completed.stderr:
+        if completed.stderr and not sensitive:
             print(completed.stderr, end="", file=sys.stderr)
         finished = datetime.now(timezone.utc).isoformat()
         self._log_event(

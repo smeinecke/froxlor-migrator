@@ -32,6 +32,7 @@ class SshClientStub:
                 self._out = deque([b"out"])
                 self._err = deque([b"err"])
                 self.closed = False
+                self.eof_received = True
 
             def recv_ready(self):
                 return bool(self._out)
@@ -167,6 +168,9 @@ class SshDriverTests(unittest.TestCase):
         driver = SshDriver(self.config)
 
         class HangingChannel:
+            eof_received = False
+            closed = False
+
             def recv_ready(self):
                 return False
 
@@ -204,6 +208,65 @@ class SshDriverTests(unittest.TestCase):
         driver = SshDriver(self.config)
         with self.assertRaises(RuntimeError):
             driver.transport()
+
+    @patch("froxlor_migrator.ssh_driver.paramiko.SSHClient", autospec=True)
+    def test_run_waits_for_stdout_arriving_after_exit_status(self, ssh_client_cls):
+        # Regression: the exit status can reach us before the last stdout
+        # packets; draining must continue until EOF, not stop when buffers
+        # happen to be momentarily empty.
+        stub = SshClientStub()
+        ssh_client_cls.return_value = stub
+        driver = SshDriver(self.config)
+
+        class LateChannel:
+            def __init__(self):
+                self.closed = False
+                self.eof_received = False
+                self._out: deque[bytes] = deque()
+
+            def recv_ready(self):
+                return bool(self._out)
+
+            def recv(self, _size):
+                return self._out.popleft()
+
+            def recv_stderr_ready(self):
+                return False
+
+            def exit_status_ready(self):
+                # Exit status arrives immediately; stdout arrives later.
+                return True
+
+            def recv_exit_status(self):
+                return 0
+
+            def close(self):
+                self.closed = True
+
+        class File:
+            def __init__(self, channel):
+                self.channel = channel
+
+            def close(self):
+                pass
+
+        channel = LateChannel()
+
+        import threading
+
+        def deliver_late():
+            import time as _t
+
+            _t.sleep(0.05)
+            channel._out.append(b"late-data")
+            channel.eof_received = True
+
+        threading.Thread(target=deliver_late, daemon=True).start()
+        stub.exec_command = lambda cmd: (File(channel), File(channel), File(channel))
+
+        result = driver.run("echo hi", timeout=10)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("late-data", result.stdout)
 
 
 if __name__ == "__main__":

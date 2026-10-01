@@ -93,22 +93,23 @@ class SshDriver:
         out_parts: list[bytes] = []
         err_parts: list[bytes] = []
         deadline = time.monotonic() + timeout if timeout else None
-        while not channel.exit_status_ready():
+        while True:
             while channel.recv_ready():
                 out_parts.append(channel.recv(65536))
             while channel.recv_stderr_ready():
                 err_parts.append(channel.recv_stderr(65536))
+            # The exit status can arrive while data packets are still in
+            # flight — only stop once the remote signaled EOF (all stream
+            # data received) or the channel was closed.
+            if channel.exit_status_ready() and (channel.eof_received or channel.closed):
+                while channel.recv_ready():
+                    out_parts.append(channel.recv(65536))
+                while channel.recv_stderr_ready():
+                    err_parts.append(channel.recv_stderr(65536))
+                break
             if deadline is not None and time.monotonic() > deadline:
                 channel.close()
                 raise TimeoutError(f"SSH command timed out after {timeout}s: {command[:200]}")
-            time.sleep(0.01)
-        # The exit status can arrive while the last packets are still in
-        # flight — keep draining until both buffers are empty.
-        while channel.recv_ready() or channel.recv_stderr_ready():
-            while channel.recv_ready():
-                out_parts.append(channel.recv(65536))
-            while channel.recv_stderr_ready():
-                err_parts.append(channel.recv_stderr(65536))
             time.sleep(0.01)
         code = channel.recv_exit_status()
         channel.close()
