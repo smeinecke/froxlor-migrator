@@ -6,7 +6,6 @@ from contextlib import AbstractContextManager
 from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
-from ..mysql_driver import query as mysql_query
 from ..transfer import remote_sudo_prefix
 from ..util import as_int, pick, random_password
 from .types import MigrationError, ResourceRow
@@ -522,10 +521,7 @@ class MigratorDomainOps:
                     allowed.append(number)
         if not allowed:
             return 0
-        allowed = sorted(set(allowed))
-        if len(allowed) == 1 and allowed[0] != 0:
-            return allowed[0]
-        return allowed[0]
+        return sorted(set(allowed))[0]
 
     def _target_mysql_prefix_setting(self) -> str:
         rows = self._run_target_panel_query("SELECT value FROM panel_settings WHERE settinggroup='customer' AND varname='mysqlprefix' LIMIT 1;")
@@ -551,22 +547,6 @@ class MigratorDomainOps:
         if not rows or not rows[0]:
             return False
         return as_int(rows[0][0], default=0) == 1
-
-    def _target_database_exists_physical(self, db_name: str) -> bool:
-        if self.runner.dry_run:
-            return False
-        if not db_name.strip():
-            return False
-        try:
-            with self._target_mysql_connect_kwargs() as connect_kwargs:
-                rows = mysql_query(
-                    connect_kwargs,
-                    "mysql",
-                    f"SHOW DATABASES LIKE {self._sql_string_literal(db_name)};",
-                )
-        except Exception:
-            return False
-        return any(row and row[0].strip() == db_name for row in rows)
 
     def _ensure_subdomains(
         self,

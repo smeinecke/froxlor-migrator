@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import pymysql
@@ -141,12 +140,3 @@ def _iter_mysql_statements(script: str) -> list[str]:
     if tail:
         statements.append(tail)
     return statements
-
-
-def import_sql_dump(connect_kwargs: dict[str, Any], database: str, dump_path: str) -> None:
-    script = Path(dump_path).read_text(encoding="utf-8", errors="ignore")
-    statements = _iter_mysql_statements(script)
-    with _connect(connect_kwargs, database) as connection:
-        with connection.cursor() as cursor:
-            for statement in statements:
-                cursor.execute(statement)

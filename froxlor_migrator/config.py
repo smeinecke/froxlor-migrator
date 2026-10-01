@@ -87,7 +87,6 @@ class BehaviorConfig:
     domain_exists: str = "fail"
     database_exists: str = "fail"
     mailbox_exists: str = "skip"
-    parallel: int = 1
 
 
 @dataclass(frozen=True)
@@ -162,7 +161,6 @@ def load_config(path: str | Path) -> AppConfig:
         domain_exists=_exists_policy(behavior, "domain_exists", "fail"),
         database_exists=_exists_policy(behavior, "database_exists", "fail"),
         mailbox_exists=_exists_policy(behavior, "mailbox_exists", "skip"),
-        parallel=max(1, int(behavior.get("parallel", 1))),
     )
     output_cfg = OutputConfig(manifest_dir=str(output.get("manifest_dir", "./manifests")))
 

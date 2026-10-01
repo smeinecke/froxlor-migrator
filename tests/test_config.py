@@ -108,7 +108,6 @@ dry_run_default = false
 domain_exists = "UPDATE"
 database_exists = "skip"
 mailbox_exists = "FAIL"
-parallel = 0
 
 [output]
 manifest_dir = "/tmp/manifests"
@@ -129,7 +128,6 @@ manifest_dir = "/tmp/manifests"
         self.assertEqual("skip", cfg.behavior.database_exists)
         self.assertEqual("fail", cfg.behavior.mailbox_exists)
         self.assertFalse(cfg.behavior.dry_run_default)
-        self.assertEqual(1, cfg.behavior.parallel)
         self.assertEqual("/tmp/manifests", cfg.output.manifest_dir)
 
     def test_source_transfer_root_defaults_to_source_web_root(self) -> None:

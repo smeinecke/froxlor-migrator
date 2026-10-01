@@ -39,7 +39,6 @@ dry_run_default = true
 domain_exists = "fail"
 database_exists = "fail"
 mailbox_exists = "skip"
-parallel = 1
 
 [output]
 manifest_dir = "./manifests"

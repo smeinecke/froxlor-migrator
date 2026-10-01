@@ -79,18 +79,3 @@ def test_execute_sends_each_statement():
         mysql_driver.execute({"host": "x"}, "db", "SELECT 1; SELECT 2;")
         cursor.execute.assert_any_call("SELECT 1")
         cursor.execute.assert_any_call("SELECT 2")
-
-
-def test_import_sql_dump_reads_file_and_executes(tmp_path):
-    dump = tmp_path / "dump.sql"
-    dump.write_text("SELECT 1; SELECT 2;")
-
-    cursor = MagicMock()
-    conn = MagicMock()
-    conn.cursor.return_value.__enter__.return_value = cursor
-    conn.__enter__.return_value = conn
-
-    with patch.object(mysql_driver, "_connect", return_value=conn):
-        mysql_driver.import_sql_dump({"host": "x"}, "db", str(dump))
-        cursor.execute.assert_any_call("SELECT 1")
-        cursor.execute.assert_any_call("SELECT 2")
