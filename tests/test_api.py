@@ -24,23 +24,37 @@ class StubClient(FroxlorClient):
 
 
 class ApiClientTests(unittest.TestCase):
-    def test_listing_paginates_until_count(self) -> None:
+    def test_listing_paginates_until_short_page(self) -> None:
         client = StubClient()
         client.queue(
             {"list": [{"id": 1}, {"id": 2}], "count": 3},
             {"list": [{"id": 3}], "count": 3},
         )
 
-        rows = client.listing("Domains.listing")
+        rows = client.listing("Domains.listing", {"sql_limit": 2})
 
         self.assertEqual([{"id": 1}, {"id": 2}, {"id": 3}], rows)
         self.assertEqual(
             [
-                ("Domains.listing", {"sql_limit": 500, "sql_offset": 0}),
-                ("Domains.listing", {"sql_limit": 500, "sql_offset": 2}),
+                ("Domains.listing", {"sql_limit": 2, "sql_offset": 0}),
+                ("Domains.listing", {"sql_limit": 2, "sql_offset": 2}),
             ],
             client.calls,
         )
+
+    def test_listing_continues_when_count_is_page_size(self) -> None:
+        # Ftps.listing returns count = len(current page), not a total — the
+        # old `len(results) >= count` break truncated after the first page.
+        client = StubClient()
+        client.queue(
+            {"list": [{"id": 1}, {"id": 2}], "count": 2},
+            {"list": [{"id": 3}, {"id": 4}], "count": 2},
+            {"list": [{"id": 5}], "count": 1},
+        )
+
+        rows = client.listing("Ftps.listing", {"sql_limit": 2})
+
+        self.assertEqual([{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}], rows)
 
     def test_filter_customer_rows_respects_id_and_login(self) -> None:
         client = StubClient()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from froxlor_migrator.froxlor_mysql import extract_sql_root_credentials, mysql_defaults_content
+from froxlor_migrator.froxlor_mysql import extract_sql_credentials, extract_sql_root_credentials, mysql_defaults_content
 from froxlor_migrator.migrate import Migrator
 
 
@@ -58,6 +58,23 @@ $sql['debug'] = false;
             },
             creds,
         )
+
+    def test_extract_credentials_value_may_contain_other_quote(self) -> None:
+        content = """
+<?php
+$sql['host'] = 'localhost';
+$sql['user'] = 'froxlor';
+$sql['password'] = 'pa"ss;with;junk';
+$sql_root[0]['host'] = 'db.internal';
+$sql_root[0]['user'] = "ro'ot";
+$sql_root[0]['password'] = "double'quoted;";
+"""
+        sql_creds = extract_sql_credentials(content)
+        root_creds = extract_sql_root_credentials(content)
+
+        self.assertEqual('pa"ss;with;junk', sql_creds["password"])
+        self.assertEqual("ro'ot", root_creds["user"])
+        self.assertEqual("double'quoted;", root_creds["password"])
 
     def test_extract_sql_root_credentials_keeps_single_index_consistent(self) -> None:
         content = """

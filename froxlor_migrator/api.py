@@ -136,20 +136,20 @@ class FroxlorClient:
         merged.setdefault("sql_offset", 0)
 
         results: list[dict[str, Any]] = []
+        limit = as_int(merged["sql_limit"], default=500)
         while True:
             data = self.call(command, merged)
             if isinstance(data, dict) and "list" in data:
                 items = data.get("list") or []
-                count = as_int(data.get("count"), default=len(items))
             elif isinstance(data, list):
                 items = data
-                count = len(items)
             else:
                 items = []
-                count = 0
 
             results.extend(items)
-            if not items or len(results) >= count:
+            # Some endpoints return `count` as the page size, others as the
+            # total — treat a short page as the end instead of trusting count.
+            if not items or len(items) < limit:
                 break
             merged["sql_offset"] = int(merged.get("sql_offset", 0)) + len(items)
 

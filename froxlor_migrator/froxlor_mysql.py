@@ -57,10 +57,15 @@ def extract_sql_credentials(content: str) -> dict[str, str] | None:
 def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
     pairs: dict[str, str] = {}
 
+    # The value body may contain the *other* quote type unescaped (e.g. a
+    # single-quoted password containing a double quote), so the closing quote
+    # must match the opening one — not either.
+    value_literal = r"(?P<q>['\"])((?:\\.|(?!(?P=q)).)*)(?P=q)"
+
     if section == "sql_root":
         indexed_pairs: dict[str, dict[str, str]] = {}
-        for index, key, raw_value in re.findall(
-            r"\$sql_root\s*\[\s*(\d+)\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;",
+        for index, key, _quote, raw_value in re.findall(
+            rf"\$sql_root\s*\[\s*(\d+)\s*\]\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
             content,
         ):
             indexed_pairs.setdefault(index, {})[key] = _php_unescape(raw_value)
@@ -69,7 +74,10 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
             if candidates:
                 pairs = max(candidates, key=_credential_score)
     else:
-        for key, raw_value in re.findall(r"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*['\"]((?:\\.|[^'\"])*)['\"]\s*;", content):
+        for key, _quote, raw_value in re.findall(
+            rf"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
+            content,
+        ):
             pairs[key] = _php_unescape(raw_value)
 
     if not pairs:
