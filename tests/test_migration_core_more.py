@@ -243,7 +243,7 @@ class MigratorCoreMoreTests(unittest.TestCase):
         self.runner.run_remote = run_remote
         self.assertEqual("", self.core._discover_remote_mysql_socket())
 
-    def test_find_target_customer_matches_by_login_and_email(self) -> None:
+    def test_find_target_customer_matches_by_login(self) -> None:
         self.core.target.list_customers.return_value = [
             {"loginname": "bob", "email": "bob@example.com", "customerid": 10},
             {"loginname": "alice", "email": "alice@example.com", "customerid": 11},
@@ -252,6 +252,15 @@ class MigratorCoreMoreTests(unittest.TestCase):
         found = self.core._find_target_customer(source)
         self.assertIsNotNone(found)
         self.assertEqual(11, found["customerid"])
+
+    def test_find_target_customer_ignores_email_only_match(self) -> None:
+        # A shared contact email must not bind the migration to an
+        # unrelated customer with a different login.
+        self.core.target.list_customers.return_value = [
+            {"loginname": "carol", "email": "alice@example.com", "customerid": 12},
+        ]
+        found = self.core._find_target_customer({"login": "alice", "email": "alice@example.com"})
+        self.assertIsNone(found)
 
     def test_ensure_target_customer_raises_when_preselected_has_no_id(self) -> None:
         with self.assertRaises(MigrationError):

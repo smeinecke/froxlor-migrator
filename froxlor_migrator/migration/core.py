@@ -163,14 +163,13 @@ class MigratorCore:
             self.runner.run(command)
 
     def _find_target_customer(self, source_customer: ResourceRow) -> ResourceRow | None:
+        # Match on login only: shared contact email is not a safe identity key
+        # and could bind the migration to an unrelated customer.
         source_login = self._customer_login(source_customer)
-        source_email = self._customer_email(source_customer)
+        if not source_login:
+            return None
         for customer in self.target.list_customers():
-            customer_login = self._customer_login(customer)
-            customer_email = self._customer_email(customer)
-            if source_login and customer_login == source_login:
-                return customer
-            if source_email and customer_email and source_email == customer_email:
+            if self._customer_login(customer) == source_login:
                 return customer
         return None
 

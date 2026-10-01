@@ -180,13 +180,27 @@ class Migrator(MigratorCore, MigratorDomainOps, MigratorAccountOps):
             _advance("Password hashes synchronized")
 
         if selection.include_files:
+            transferred_docroots: set[tuple[str, str]] = set()
             for domain in selection.domains:
+                domain_name = self._domain_name(domain)
+                if as_int(pick(domain, "aliasdomain", "isaliasdomain", default=0)) > 0:
+                    self.runner.debug_event(
+                        "file_transfer_skipped",
+                        domain=domain_name,
+                        reason="alias domain shares its target domain's docroot",
+                    )
+                    continue
                 source_docroot = self._resolve_source_docroot(domain, customer_login)
                 target_docroot = self._resolve_target_docroot(domain, customer_login, target_login, source_docroot)
-                _status(f"Transferring domain data: {self._domain_name(domain)}")
+                pair = (source_docroot, target_docroot)
+                if pair in transferred_docroots:
+                    self.runner.debug_event("file_transfer_skipped", domain=domain_name, reason="docroot already transferred")
+                    continue
+                transferred_docroots.add(pair)
+                _status(f"Transferring domain data: {domain_name}")
                 self.runner.transfer_files(source_docroot, target_docroot)
                 self._fix_transferred_docroot_ownership(target_docroot, target_login)
-                _advance(f"Files transferred: {self._domain_name(domain)}")
+                _advance(f"Files transferred: {domain_name}")
 
         if selection.include_mail and selection.mailboxes:
             _status("Transferring mailbox content")

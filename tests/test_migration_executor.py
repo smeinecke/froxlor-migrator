@@ -151,6 +151,54 @@ class MigratorExecuteTests(unittest.TestCase):
         self.assertTrue(migrator.runner.transferred_files)
         self.assertTrue(migrator.runner.transferred_mailboxes)
 
+    def _selection_with_domains(self, domains: list[dict]) -> Selection:
+        return Selection(
+            customer={"loginname": "foo"},
+            target_customer={"customerid": 1},
+            domains=domains,
+            subdomains=[],
+            databases=[],
+            mailboxes=[],
+            email_forwarders=[],
+            email_senders=[],
+            ftp_accounts=[],
+            ssh_keys=[],
+            data_dumps=[],
+            dir_protections=[],
+            dir_options=[],
+            domain_zones=[],
+            include_files=True,
+            include_databases=False,
+            include_mail=False,
+            include_subdomains=False,
+            validate_database_names=False,
+            php_setting_map={},
+            ip_mapping={},
+        )
+
+    def test_execute_skips_alias_and_duplicate_docroot_transfers(self) -> None:
+        migrator = DummyMigrator()
+        migrator.runner.dry_run = False
+
+        domains = [
+            {"domain": "example.com", "documentroot": "/var/www/foo/web"},
+            # Alias domain: shares the aliased domain's docroot; must not
+            # trigger a whole-homedir transfer.
+            {"domain": "alias.com", "aliasdomain": "5", "documentroot": ""},
+            # Distinct domain resolving to the same docroot pair.
+            {"domain": "dup.com", "documentroot": "/var/www/foo/web"},
+        ]
+        migrator.execute(self._selection_with_domains(domains))
+
+        self.assertEqual(1, len(migrator.runner.transferred_files))
+        skipped = [p for m, p in migrator.runner.debug_events if m == "file_transfer_skipped"]
+        self.assertEqual(2, len(skipped))
+        reasons = {s["reason"] for s in skipped}
+        self.assertEqual(
+            {"alias domain shares its target domain's docroot", "docroot already transferred"},
+            reasons,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

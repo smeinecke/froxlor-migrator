@@ -92,7 +92,7 @@ class MigratorCoreTests(unittest.TestCase):
         self.assertEqual([99], self.core._coerce_id_list("", [99]))
         self.assertEqual([99], self.core._coerce_id_list(None, [99]))
 
-    def test_find_target_customer_uses_login_and_email(self) -> None:
+    def test_find_target_customer_uses_login(self) -> None:
         source = {"loginname": "alice", "email": "alice@example.com"}
         self.target = StubClient([
             {"loginname": "bob", "email": "bob@example.com"},
