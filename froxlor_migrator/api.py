@@ -136,6 +136,7 @@ class FroxlorClient:
         merged.setdefault("sql_offset", 0)
 
         results: list[dict[str, Any]] = []
+        previous_items: list[dict[str, Any]] | None = None
         limit = as_int(merged["sql_limit"], default=500)
         while True:
             data = self.call(command, merged)
@@ -152,6 +153,13 @@ class FroxlorClient:
             if not items or len(items) < limit:
                 break
             merged["sql_offset"] = int(merged.get("sql_offset", 0)) + len(items)
+            if items == previous_items:
+                # Endpoint ignored sql_offset and returned the same page —
+                # stop rather than loop forever.
+                logger.warning("API %s returned an identical page; stopping pagination", command)
+                results = results[: -len(items)]
+                break
+            previous_items = items
 
         return results
 

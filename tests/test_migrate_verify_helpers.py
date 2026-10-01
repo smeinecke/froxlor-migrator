@@ -187,6 +187,9 @@ class DryRunAndNormalizeTests(unittest.TestCase):
                 "include_files": False,
                 "include_databases": False,
                 "include_mail": False,
+                "include_password_sync": False,
+                "include_forwarders": False,
+                "include_sender_aliases": False,
                 "domains": [],
             },
         )()

@@ -138,6 +138,14 @@ class MigratorCore:
             selection.include_files
             or selection.include_databases
             or selection.include_mail
+            # Redirect sync (unconditional for migrated domains), sender-alias
+            # fallback, and password/2FA/ftp-hash sync all write through the
+            # target panel DB (SSH tunnel or the remote mysql CLI), so they
+            # need SSH too.
+            or bool(selection.domains)
+            or selection.include_password_sync
+            or selection.include_forwarders
+            or selection.include_sender_aliases
             or any(as_int(pick(domain, "dkim", default=0)) == 1 for domain in selection.domains)
         )
         for command in self.runner.preflight_commands(

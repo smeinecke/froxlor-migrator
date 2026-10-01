@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import argparse
 import shlex
-from collections.abc import Iterator
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from typing import Any
 
 from .api import FroxlorApiError, FroxlorClient
@@ -588,6 +588,15 @@ def _run_mysql_query_target(config, sql: str) -> list[list[str]]:
         return mysql_query(connect_kwargs, config.mysql.target_panel_database, sql)
 
 
+@contextmanager
+def _target_panel_session(config) -> Iterator[Callable[[str], list[list[str]]]]:
+    """One SSH connection + tunnel shared by every per-customer target
+    panel query in a verification run (redirects, FTP hashes, customer
+    secrets) instead of a fresh SSH session per query."""
+    with _target_connect_kwargs_via_ssh(config) as connect_kwargs:
+        yield lambda sql: mysql_query(connect_kwargs, config.mysql.target_panel_database, sql)
+
+
 def _load_redirect_map_source(config, customer_id: int) -> dict[str, tuple[str, int]]:
     sql = (
         "SELECT d.domain, a.domain, COALESCE(drc.rid, 1) "
@@ -612,7 +621,7 @@ def _load_redirect_map_source(config, customer_id: int) -> dict[str, tuple[str, 
     return result
 
 
-def _load_redirect_map_target(config, customer_id: int) -> dict[str, tuple[str, int]]:
+def _load_redirect_map_target(config, customer_id: int, query: Callable[[str], list[list[str]]] | None = None) -> dict[str, tuple[str, int]]:
     sql = (
         "SELECT d.domain, a.domain, COALESCE(drc.rid, 1) "
         "FROM panel_domains d "
@@ -620,7 +629,7 @@ def _load_redirect_map_target(config, customer_id: int) -> dict[str, tuple[str, 
         "LEFT JOIN domain_redirect_codes drc ON drc.did=d.id "
         f"WHERE d.customerid={customer_id} AND d.aliasdomain IS NOT NULL"
     )
-    rows = _run_mysql_query_target(config, sql)
+    rows = (query or (lambda q: _run_mysql_query_target(config, q)))(sql)
     result: dict[str, tuple[str, int]] = {}
     for row in rows:
         if len(row) < 3:
@@ -632,12 +641,12 @@ def _load_redirect_map_target(config, customer_id: int) -> dict[str, tuple[str, 
     return result
 
 
-def _load_ftp_password_map(config, customer_id: int, target: bool) -> dict[str, str]:
+def _load_ftp_password_map(config, customer_id: int, target: bool, query: Callable[[str], list[list[str]]] | None = None) -> dict[str, str]:
     # Ftps.listing strips `password`, so the API compare is vacuous — the hash
     # only exists in panel DB `ftp_users`.
     sql = f"SELECT username, password FROM ftp_users WHERE customerid={int(customer_id)}"
     if target:
-        rows = _run_mysql_query_target(config, sql)
+        rows = (query or (lambda q: _run_mysql_query_target(config, q)))(sql)
     else:
         rows = _run_mysql_query_local(
             connect_kwargs_from_credentials(load_local_sql_credentials(froxlor_userdata_paths())),
@@ -647,7 +656,7 @@ def _load_ftp_password_map(config, customer_id: int, target: bool) -> dict[str, 
     return {str(row[0]).strip().lower(): str(row[1]).strip() for row in rows if len(row) >= 2}
 
 
-def _load_customer_secrets(config, customer_id: int, target: bool) -> tuple[str, int, str] | None:
+def _load_customer_secrets(config, customer_id: int, target: bool, query: Callable[[str], list[list[str]]] | None = None) -> tuple[str, int, str] | None:
     """(password, type_2fa, data_2fa) from panel_customers — the API strips
     password and data_2fa from customer rows, so API fields cannot be used."""
     sql = (
@@ -655,7 +664,7 @@ def _load_customer_secrets(config, customer_id: int, target: bool) -> tuple[str,
         f"WHERE customerid={int(customer_id)} LIMIT 1"
     )
     if target:
-        rows = _run_mysql_query_target(config, sql)
+        rows = (query or (lambda q: _run_mysql_query_target(config, q)))(sql)
     else:
         rows = _run_mysql_query_local(
             connect_kwargs_from_credentials(load_local_sql_credentials(froxlor_userdata_paths())),
@@ -720,7 +729,20 @@ def main() -> int:
         logins = sorted(set(source_customers) & set(target_customers))
 
     failures = 0
-    for login in logins:
+    target_session_stack: ExitStack | None = None
+    target_panel_query_fn: Callable[[str], list[list[str]]] | None = None
+
+    def _target_panel_query(sql: str) -> list[list[str]]:
+        nonlocal target_session_stack, target_panel_query_fn
+        if target_panel_query_fn is None:
+            # Lazily open one SSH session + tunnel shared by every
+            # per-customer target panel query below.
+            target_session_stack = ExitStack()
+            target_panel_query_fn = target_session_stack.enter_context(_target_panel_session(config))
+        return target_panel_query_fn(sql)
+
+    try:
+      for login in logins:
         src_customer = source_customers.get(login)
         dst_customer = target_customers.get(login)
         if not src_customer or not dst_customer:
@@ -735,7 +757,7 @@ def main() -> int:
         if not args.skip_password_sync:
             try:
                 src_secrets = _load_customer_secrets(config, src_id, target=False)
-                dst_secrets = _load_customer_secrets(config, dst_id, target=True)
+                dst_secrets = _load_customer_secrets(config, dst_id, target=True, query=_target_panel_query)
             except Exception as exc:
                 print(f"WARN customer={login}: could not query customer password/2FA state ({exc})")
             else:
@@ -863,7 +885,7 @@ def main() -> int:
         if not args.skip_redirects:
             try:
                 src_redirects = _load_redirect_map_source(config, src_id)
-                dst_redirects = _load_redirect_map_target(config, dst_id)
+                dst_redirects = _load_redirect_map_target(config, dst_id, _target_panel_query)
             except Exception as exc:
                 print(f"FAIL customer={login} redirects: could not query redirect mappings ({exc})")
                 failures += 1
@@ -876,7 +898,7 @@ def main() -> int:
         if not args.skip_ftp and not args.skip_password_sync:
             try:
                 src_ftp_hashes = _load_ftp_password_map(config, src_id, target=False)
-                dst_ftp_hashes = _load_ftp_password_map(config, dst_id, target=True)
+                dst_ftp_hashes = _load_ftp_password_map(config, dst_id, target=True, query=_target_panel_query)
             except Exception as exc:
                 print(f"WARN customer={login}: could not query FTP password hashes ({exc})")
 
@@ -1081,6 +1103,9 @@ def main() -> int:
 
         if not customer_failed:
             print(f"OK customer={login}: domains/mail/settings/certs match")
+    finally:
+        if target_session_stack is not None:
+            target_session_stack.close()
 
     if failures:
         print(f"Verification failed: {failures} mismatch(es)")

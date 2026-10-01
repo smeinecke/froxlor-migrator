@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sys
 import unittest
 
@@ -90,7 +91,10 @@ class VerifyMigrationMainTests(unittest.TestCase):
             source_customers if api_url == "https://s" else target_customers, php_settings, domains
         )
         verify_migration._load_redirect_map_source = lambda config, customer_id: {}
-        verify_migration._load_redirect_map_target = lambda config, customer_id: {}
+        verify_migration._load_redirect_map_target = lambda config, customer_id, query=None: {}
+        verify_migration._load_ftp_password_map = lambda config, customer_id, target, query=None: {}
+        verify_migration._load_customer_secrets = lambda config, customer_id, target, query=None: ("hash", 0, "")
+        verify_migration._target_panel_session = lambda config: contextlib.nullcontext(lambda sql: [])
 
         sys_argv = sys.argv
         try:

@@ -56,6 +56,19 @@ class ApiClientTests(unittest.TestCase):
 
         self.assertEqual([{"id": 1}, {"id": 2}, {"id": 3}, {"id": 4}, {"id": 5}], rows)
 
+    def test_listing_stops_when_endpoint_ignores_offset(self) -> None:
+        # A full page identical to the previous one means the endpoint ignored
+        # sql_offset — stop instead of looping forever and drop the duplicate.
+        client = StubClient()
+        client.queue(
+            {"list": [{"id": 1}, {"id": 2}], "count": 2},
+            {"list": [{"id": 1}, {"id": 2}], "count": 2},
+        )
+
+        rows = client.listing("Ftps.listing", {"sql_limit": 2})
+
+        self.assertEqual([{"id": 1}, {"id": 2}], rows)
+
     def test_filter_customer_rows_respects_id_and_login(self) -> None:
         client = StubClient()
         rows = [
