@@ -553,6 +553,46 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
   75% coverage gate** (code runs inside containers) — use
   `make test-integration` (`--no-cov`) or the CI compose job.
 
+### Round 6 (post-review cleanup)
+
+- [x] **`_extract_credentials` ignored the captured quote type** —
+  `_php_unescape` always ran in single-quote mode, so `\n`/`\"` in
+  double-quoted `userdata.inc.php` values were never unescaped. The
+  `double_quoted` flag is now derived from the actual opening quote.
+
+- [x] **`_ensure_target_customer` skipped `Customers.update` on the
+  add-failed-but-exists path** — settings drifted silently on
+  re-migration. The found customer now receives the update payload.
+
+- [x] **`_ensure_data_dumps` nested the absolute `destdir` under the
+  docroot when `panel_tasks.data` lacked `loginname`** — falls back to
+  the customer login; skips with a debug event when no owner can be
+  determined. `data_dump_key` accepts a login fallback so dedup stays
+  consistent.
+
+- [x] **Subdomain file transfer nested the full absolute source path**
+  when the path equaled the customer root (`relative_customer_path` → `""`
+  then fell back to `sub_path.lstrip("/")`). The fallback is removed;
+  `""` maps to the target docroot.
+
+- [x] **`_compare_subdomain` compared `path` verbatim** — source listings
+  can return absolute login-embedded paths while the migrator writes the
+  relative form, producing false mismatches. Both sides normalize via
+  `relative_customer_path` now.
+
+- [x] **Committed files failed `ruff format --check`** — CI runs the
+  format gate; repo is now format-clean (added to the verify loop).
+
+### Verified non-issues this pass
+
+- `Customers.update` ignores unknown params (`getParam` only reads known
+  keys) — `type_2fa`/`data_2fa` in the payload are harmless.
+- `openbasedir_path` is an int enum (0/1/2), not a filesystem path —
+  verbatim compare is correct.
+- Verify only matches same-login customers, so single-login
+  normalization of dir-protection/dir-option keys is consistent.
+- `transfer_files` already runs under `bash -o pipefail`.
+
 ### Still open / deferred
 
 - [ ] **N+1 listing refreshes** — every ensure-* re-lists target rows
