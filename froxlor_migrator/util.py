@@ -148,6 +148,20 @@ def relative_customer_path(path: str, customer_login: str) -> str:
     return cleaned
 
 
+def replace_ip_tokens(value: str, replacements: dict[str, str]) -> str:
+    if not value or not replacements:
+        return value
+    parts = re.split(r"(\s+)", value)
+    for index, part in enumerate(parts):
+        token = part.strip()
+        if not token:
+            continue
+        replacement = replacements.get(token.lower())
+        if replacement:
+            parts[index] = replacement
+    return "".join(parts)
+
+
 def domain_name(row: dict[str, Any]) -> str:
     return str(pick(row, "domain", "domainname", default="")).strip().lower()
 

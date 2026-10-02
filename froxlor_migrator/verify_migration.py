@@ -28,6 +28,7 @@ from .util import (
     mailbox_address,
     pick,
     relative_customer_path,
+    replace_ip_tokens,
     resolve_subdomain_parts,
     ssh_key_identity,
 )
@@ -698,6 +699,11 @@ def _parse_verify_args() -> argparse.Namespace:
     parser.add_argument("--skip-dir-options", action="store_true", help="Skip directory option comparisons")
     parser.add_argument("--skip-ssh-keys", action="store_true", help="Skip SSH key comparisons")
     parser.add_argument("--skip-data-dumps", action="store_true", help="Skip data dump comparisons")
+    parser.add_argument(
+        "--ip-value-map",
+        default="",
+        help="Comma-separated source-ip=target-ip pairs used to translate zone record content before comparing",
+    )
     parser.add_argument("--skip-redirects", action="store_true", help="Skip domain redirect comparisons")
     return parser.parse_args()
 
@@ -724,13 +730,13 @@ class _Report:
         print(f"SKIP customer={self.login} {subject}: {detail}")
 
 
-def _custom_zone_records(rows: list[dict[str, Any]], domain: str) -> set[tuple[str, str, int, str, int]]:
+def _custom_zone_records(rows: list[dict[str, Any]], domain: str, ip_value_map: dict[str, str] | None = None) -> set[tuple[str, str, int, str, int]]:
     return {
         (
             str(pick(item, "record", default="")).strip().lower(),
             str(pick(item, "type", default="")).strip().upper(),
             as_int(pick(item, "prio", default=0)),
-            str(pick(item, "content", default="")).strip(),
+            replace_ip_tokens(str(pick(item, "content", default="")).strip(), ip_value_map or {}),
             as_int(pick(item, "ttl", default=18000)),
         )
         for item in rows
@@ -915,7 +921,7 @@ def _verify_domains(
             report.fail("; ".join(errs), subject=f"domain={domain}")
         _verify_certificate(report, domain, res["certs"], res["dst_certs"])
         if not args.skip_domain_zones:
-            _verify_zone(report, source, target, login, domain)
+            _verify_zone(report, source, target, login, domain, args.ip_value_map)
 
 
 def _verify_certificate(report: _Report, domain: str, src_certs: dict, dst_certs: dict) -> None:
@@ -931,14 +937,21 @@ def _verify_certificate(report: _Report, domain: str, src_certs: dict, dst_certs
             report.fail(f"{field} mismatch", subject=f"cert={domain}")
 
 
-def _verify_zone(report: _Report, source: FroxlorClient, target: FroxlorClient, login: str, domain: str) -> None:
+def _verify_zone(
+    report: _Report,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    login: str,
+    domain: str,
+    ip_value_map: dict[str, str] | None = None,
+) -> None:
     try:
         src_zone_rows = source.list_domain_zones(domainname=domain, strict=True)
         dst_zone_rows = target.list_domain_zones(domainname=domain, strict=True)
     except FroxlorApiError as exc:
         report.fail(f"could not list zone records ({exc})", subject=f"zone={domain}")
         return
-    src_zones = _custom_zone_records(src_zone_rows, domain)
+    src_zones = _custom_zone_records(src_zone_rows, domain, ip_value_map)
     dst_zones = _custom_zone_records(dst_zone_rows, domain)
     for zone in sorted(src_zones - dst_zones):
         report.fail(f"missing custom record {zone}", subject=f"zone={domain}")
@@ -1135,8 +1148,32 @@ def _verify_customer(
     return report.failures
 
 
+def _parse_ip_value_map(raw: str) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if "=>" in entry:
+            left, right = entry.split("=>", 1)
+        elif "=" in entry:
+            left, right = entry.split("=", 1)
+        else:
+            raise ValueError(f"Invalid --ip-value-map entry '{entry}': expected source-ip=target-ip")
+        left, right = left.strip().lower(), right.strip().lower()
+        if not left or not right:
+            raise ValueError(f"Invalid --ip-value-map entry '{entry}': empty side")
+        mapping[left] = right
+    return mapping
+
+
 def main() -> int:
     args = _parse_verify_args()
+    try:
+        args.ip_value_map = _parse_ip_value_map(args.ip_value_map)
+    except ValueError as exc:
+        print(str(exc))
+        return 2
     config = load_config(args.config)
     source = FroxlorClient(
         config.source.api_url,
