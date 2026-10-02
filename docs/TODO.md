@@ -749,9 +749,28 @@ The new coverage immediately caught three real production bugs
 #### Remaining e2e coverage gaps (accepted/documented)
 
 - Domain-only mode / pre-selected `target_customer` rename path —
-  unit-tested only.
+  unit-tested only (verify can't compare renamed customers).
 - `ip_mapping` — both panels share one IP; nothing to map against.
-- `letsencrypt=True` propagation — all fixtures are `letsencrypt=0`;
-  real ACME would fail on `.test` domains (the call is non-fatal by
-  design).
-- `custbeta` is seeded but not migrated (mail-domain fixtures only).
+- Real ACME issuance — `letsencrypt=1` propagation is covered with
+  `le_domain_dnscheck` disabled; no real DNS/ACME on `.test` domains.
+
+### Round 10 — Integration hardening, cont. (`6c84ea3`, `115b5ca`, `5702f54`, `ec77a73`)
+
+Extended coverage: `--use-ssl` at install + `letsencrypt=1` fixture on
+`empty-demo.test` (deferred LE-enable path exercised for real), dry-run
+write-guard, pre-created existing customer, negative verify on a deleted
+zone record, byte-level web-content parity, docroot ownership vs.
+`panel_customers.guid`, and a `migrator_marker` DB row compared on the
+target.
+
+New bugs caught by the stronger assertions:
+
+- `_fix_transferred_docroot_ownership` silently skipped when the
+  customer's system user didn't exist yet (Froxlor's CREATE_HOME cron
+  creates it async) — leaving docroots `root:root` permanently. Now
+  falls back to a numeric `chown guid:guid` from `panel_customers.guid`
+  (the exact uid/gid Froxlor will assign).
+- `load_config` silently ignored unknown keys — the test harness shipped
+  dead `target_owner_user`/`target_owner_group`/`parallel` keys for
+  months. `load_config` now rejects unknown keys per section; the test
+  config was cleaned accordingly.
