@@ -94,7 +94,7 @@ services:
       - target-net
 
   bootstrap:
-    image: docker:27-cli
+    image: docker:28-cli
     profiles: ["bootstrap"]
     working_dir: /workspace/testing
     environment:
