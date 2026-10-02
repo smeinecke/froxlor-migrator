@@ -113,15 +113,19 @@ cd testing
 docker compose run --rm --profile bootstrap bootstrap migrate_and_verify
 ```
 
-This performs the full migration flow for seeded test customers:
+This performs the full migration flow for seeded test customers. Every apply
+runs through `main.py --non-interactive` (the real CLI path: arg parsing,
+selection, mappings, and confirmation all get covered — not a test-only
+`Selection` shortcut):
 
 1. a `--dry-run` apply, then asserts none of the seed customers exist on the target (guards writes bypassing dry-run)
 2. `custbeta` is pre-created on the target so the apply exercises the existing-customer update path
-3. a real apply (files + databases + mailbox content via doveadm)
+3. a real apply (files + databases + mailbox content via doveadm); `custalpha` runs with `--ip-map` so `static-demo.test` rebinds from the source secondary IP:port to the target's
 4. a second apply after deliberately drifting a target DNS record — exercises all update/dedup paths plus the zone delete-and-re-add repair (`DomainZones.update` is a stub in Froxlor)
-5. `verify_migration` for all three customers, plus the mailbox probe assertion
+5. `verify_migration` for all three customers with `--ip-value-map` (zone record content is translated source-IP → target-IP before comparison), plus the mailbox probe assertion
 6. a negative check: a migrated zone record is deleted on the target and `verify_migration` must fail — then a final apply + verify restores parity
 7. byte-level file-content parity between source and target customer dirs, docroot ownership matching the customer's `panel_customers.guid`, and the `migrator_marker` database row on the target
+8. a domain-only rename: `wp-demo.test` and `static-demo.test` migrate into the pre-created `custdelta` via `--domain-only --target-customer` — `assert_rename.py` verifies target ownership and docroot remapping under the new login
 
 It also injects a probe email into source mailbox `alerts@secure-demo.test` before the first apply and asserts that the exact probe reaches the target through the migrator's own `doveadm backup | dsync-server` transfer. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
 

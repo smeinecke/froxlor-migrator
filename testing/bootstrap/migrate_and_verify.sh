@@ -69,12 +69,13 @@ assert_customers_absent() {
 }
 
 precreate_target_customer() {
+	local login="${1:-custbeta}"
 	docker compose exec -T source-froxlor sh -lc \
 		"PYTHONPATH=/workspace \
 		TARGET_API_URL='${TARGET_API_URL}' TARGET_API_KEY='${TARGET_API_KEY}' TARGET_API_SECRET='${TARGET_API_SECRET}' \
 		TARGET_DB_ROOT_USER='${TARGET_DB_ROOT_USER:-root}' TARGET_DB_ROOT_PASSWORD='${TARGET_DB_ROOT_PASSWORD:-target-root}' \
 		TARGET_API_MYSQL_HOST='${TARGET_API_MYSQL_HOST:-target-db}' TARGET_API_MYSQL_PORT='${TARGET_API_MYSQL_PORT:-3306}' \
-		uv run --no-project --with requests --with pymysql python3 /workspace/testing/bootstrap/precreate_target_customer.py custbeta"
+		uv run --no-project --with requests --with pymysql python3 /workspace/testing/bootstrap/precreate_target_customer.py '$login'"
 }
 
 verify_target_web_content() {
@@ -149,24 +150,73 @@ drift_target_zone_record() {
 		 WHERE d.domain='secure-demo.test' AND e.record='migrator-test' AND e.type='TXT';\""
 }
 
+resolve_ip_ids() {
+	# Numeric panel_ipsandports ids for the secondary IP fixtures on each side.
+	SRC_IP2_ID="$(docker compose exec -T source-db sh -lc \
+		"MYSQL_PWD='${SOURCE_DB_ROOT_PASSWORD:-source-root}' mariadb -u'${SOURCE_DB_ROOT_USER:-root}' '${SOURCE_DB_NAME:-froxlor}' -N -e \
+		\"SELECT id FROM panel_ipsandports WHERE ip='${SOURCE_SECONDARY_IP:-10.66.77.1}' AND port=80\"" | tr -d '[:space:]')"
+	DST_IP2_ID="$(docker compose exec -T target-db sh -lc \
+		"MYSQL_PWD='${TARGET_DB_ROOT_PASSWORD:-target-root}' mariadb -u'${TARGET_DB_ROOT_USER:-root}' '${TARGET_DB_NAME:-froxlor}' -N -e \
+		\"SELECT id FROM panel_ipsandports WHERE ip='${TARGET_SECONDARY_IP:-10.66.77.2}' AND port=80\"" | tr -d '[:space:]')"
+	[ -n "$SRC_IP2_ID" ] && [ -n "$DST_IP2_ID" ] || {
+		echo "secondary IP fixture missing (src='$SRC_IP2_ID' dst='$DST_IP2_ID')" >&2
+		exit 1
+	}
+	IP_MAP_ARG="${SRC_IP2_ID}=${DST_IP2_ID}"
+	IP_VALUE_MAP_ARG="${SOURCE_SECONDARY_IP:-10.66.77.1}=${TARGET_SECONDARY_IP:-10.66.77.2}"
+}
+
 run_apply() {
 	# Extra args are passed through to run_migration_apply.py (e.g. --dry-run).
+	# The --ip-map token must reference an IP actually bound to a migrated
+	# domain — only custalpha owns static-demo.test, so the map is scoped to
+	# that customer's run.
 	docker compose exec -T source-froxlor sh -lc \
-		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko /workspace/testing/bootstrap/run_migration_apply.py \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko --with rich /workspace/testing/bootstrap/run_migration_apply.py \
 		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
 		--include-mail \
-		--customer custalpha \
+		--ip-map '$IP_MAP_ARG' \
+		--customer custalpha $*"
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko --with rich /workspace/testing/bootstrap/run_migration_apply.py \
+		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+		--include-mail \
 		--customer custbeta \
 		--customer custgamma $*"
 }
 
 run_verify() {
 	docker compose exec -T source-froxlor sh -lc \
-		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko python3 -m froxlor_migrator.verify_migration \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko --with rich python3 -m froxlor_migrator.verify_migration \
 		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+		--ip-value-map '$IP_VALUE_MAP_ARG' \
 		--customer custalpha \
 		--customer custbeta \
 		--customer custgamma"
+}
+
+rename_customer_apply() {
+	# Domain-only apply into a pre-created, differently-named target customer —
+	# exercises docroot/login remap (custalpha resources land under custdelta).
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko --with rich /workspace/testing/bootstrap/run_migration_apply.py \
+		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+		--customer custalpha \
+		--domain-only --target-customer custdelta \
+		--ip-map '$IP_MAP_ARG' \
+		--extra-arg=--domains --extra-arg='wp-demo.test,static-demo.test' \
+		--extra-arg=--subdomains --extra-arg=none \
+		--extra-arg=--databases --extra-arg=none \
+		--extra-arg=--mailboxes --extra-arg=none \
+		--extra-arg=--ftp-accounts --extra-arg=none"
+}
+
+assert_rename() {
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql python3 /workspace/testing/bootstrap/assert_rename.py \
+		--api-url '${TARGET_API_URL}' --api-key '${TARGET_API_KEY}' --api-secret '${TARGET_API_SECRET}' \
+		--login custdelta --domain wp-demo.test --domain static-demo.test \
+		--data-root /workspace/testing/data/target/customers"
 }
 
 tamper_target_zone_record() {
@@ -208,7 +258,9 @@ port = ${TARGET_SSH_PORT:-2222}
 strict_host_key_checking = false
 
 [paths]
-source_web_root = "/var/customers/webs"
+# Seeded documentroots live under /data/customers, so the panel-visible root
+# and the transfer root coincide in the testbed.
+source_web_root = "/data/customers"
 source_transfer_root = "/data/customers"
 target_web_root = "/data/customers"
 
@@ -225,7 +277,8 @@ mysql = "mysql"
 doveadm = "doveadm"
 
 [behavior]
-dry_run_default = false
+# Default dry-run so omitting --apply is safe; real runs pass --apply.
+dry_run_default = true
 domain_exists = "update"
 database_exists = "skip"
 mailbox_exists = "update"
@@ -240,6 +293,7 @@ refresh_froxlor_runtime target-froxlor
 wait_api "${SOURCE_API_URL}"
 wait_api "${TARGET_API_URL}"
 
+resolve_ip_ids
 seed_mail_probe
 
 # 1) Dry-run must not write anything to the target.
@@ -276,5 +330,12 @@ run_apply
 run_verify
 verify_target_web_content
 verify_db_marker
+
+# Rename path: domain-only apply of custalpha's domains into a pre-created,
+# differently-named target customer — exercises docroot/login remap. Runs last
+# because it moves wp-demo.test/static-demo.test away from custalpha.
+precreate_target_customer custdelta
+rename_customer_apply
+assert_rename
 
 echo "Migration + parity verification succeeded"
