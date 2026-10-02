@@ -127,7 +127,7 @@ class MigratorDomainOps:
                 # SubDomains.get(id, domainname) — `id` is the *domain* id
                 # (cert field `domainid`), not the ssl-settings row id.
                 cert_domain_id = as_int(pick(existing_target_cert, "domainid", "domain_id", default=0))
-                update_params = dict(cert_payload)
+                update_params: dict[str, Any] = dict(cert_payload)
                 if cert_domain_id > 0:
                     update_params["id"] = cert_domain_id
                 written = self.target.call("Certificates.update", update_params)
