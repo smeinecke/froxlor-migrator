@@ -813,3 +813,37 @@ Watch items resolved/closed:
 
 - Real ACME issuance — `letsencrypt=1` propagation is covered with
   `le_domain_dnscheck` disabled; no real DNS/ACME on `.test` domains.
+
+### Round 12 — Real Textual TUI wizard
+
+The interactive front-end was a sequential Rich prompt flow, not a TUI.
+Now replaced by a screen-based Textual wizard (`wizard.py`) as the default
+interactive mode; `tui.py` keeps the `--non-interactive` headless path.
+
+Architecture:
+
+- `plan.py` — shared, side-effect-free planning layer (view adapters,
+  selection by tokens, mapping resolution, discovery, `build_selection`,
+  `build_replay_command`, `plan_rows`). Both front-ends consume it.
+- `wizard.py` — `MigratorWizardApp` with screens: Connect → Customer →
+  Mode → Domains → Resources (tabbed pickers) → Mappings (skipped when
+  nothing to map) → Options → Plan → Run → Result. API work runs in
+  `run_worker(thread=True, exit_on_error=False)`; screens stash tentative
+  widget state so `Esc`/`Back` restores earlier toggles.
+- `tui.py` — arg parsing + headless execution + dispatch: TTY → wizard,
+  `--non-interactive` → headless, non-TTY → exit 2.
+
+Divergences fixed while wiring the wizard:
+
+- Whole-customer mode filtered mailboxes to selected domains; headless
+  migrates all — wizard now matches.
+- Invalid `--php-map`/`--ip-map` presets previously only toasted and still
+  advanced; now block the step.
+- `run_worker` defaulted to `exit_on_error=True` which crashed the app on
+  connection failure instead of showing the retry path.
+- Command palette disabled (`ctrl+p` stray clicks opened it during tests).
+
+Testing: `tests/test_wizard.py` drives the app via `run_test()` + Pilot
+with injected dummy clients/migrator — happy path, domain-only target
+picker, back-nav state preservation, connect-error retry, run-error
+manifest display.

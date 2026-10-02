@@ -489,6 +489,7 @@ dependencies = [
     { name = "pymysql" },
     { name = "requests" },
     { name = "rich" },
+    { name = "textual" },
     { name = "tomli" },
 ]
 
@@ -511,6 +512,7 @@ requires-dist = [
     { name = "pymysql", specifier = ">=1.1.1" },
     { name = "requests", specifier = ">=2.32.0" },
     { name = "rich", specifier = ">=13.7.0" },
+    { name = "textual", specifier = ">=8.2.8" },
     { name = "tomli", specifier = ">=2.0.1" },
 ]
 

@@ -1,6 +1,8 @@
 # Froxlor Migrator (Source-side TUI)
 
-Python TUI utility to migrate selected Froxlor customer resources from one server to another.
+Python migration utility with a real terminal UI wizard (Textual) plus a fully
+scriptable non-interactive CLI. Migrates selected Froxlor customer resources
+from one server to another.
 
 What it does:
 
@@ -55,17 +57,20 @@ Paramiko authentication order is:
 
 ## Run
 
-Dry-run (default):
+Interactive wizard (default on a TTY):
 
 ```bash
 uv run python main.py --config config.toml
 ```
 
-Apply mode:
-
-```bash
-uv run python main.py --config config.toml --apply
-```
+The wizard walks through connection checks, source-customer selection,
+migration mode, domain/resource pickers, PHP/IP mappings, transfer options,
+and a review screen with a replayable `--non-interactive` command — then runs
+the migration with live progress. `Esc`/`Back` returns to earlier steps and
+restores your previous selections. Add `--apply` to start in apply mode
+(otherwise it begins as a dry run; you can also toggle dry-run on the options
+screen). Running without a TTY exits with an error — use `--non-interactive`
+for scripted runs.
 
 Fully non-interactive (no prompts/TUI):
 

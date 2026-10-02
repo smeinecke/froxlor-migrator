@@ -110,10 +110,10 @@ class RunAppTests(unittest.TestCase):
 
         with (
             patch.object(tui_module, "load_config", return_value=DummyConfig()),
-            patch.object(tui_module, "FroxlorClient", DummyClient),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", DummyMigrator),
-            patch.object(tui_module, "Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
         ):
             sys_argv = sys.argv
             try:
@@ -166,10 +166,10 @@ class RunAppTests(unittest.TestCase):
 
         with (
             patch.object(tui_module, "load_config", return_value=DummyConfig()),
-            patch.object(tui_module, "FroxlorClient", DummyClient),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", FailingMigrator),
-            patch.object(tui_module, "Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
         ):
             sys_argv = sys.argv
             try:
@@ -186,6 +186,48 @@ class RunAppTests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     tui_module.run_app()
                 self.assertEqual(1, ctx.exception.code)
+            finally:
+                sys.argv = sys_argv
+
+    def test_run_app_interactive_requires_tty(self) -> None:
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(sys.stdin, "isatty", return_value=False),
+            patch.object(sys.stdout, "isatty", return_value=False),
+        ):
+            sys_argv = sys.argv
+            try:
+                sys.argv = ["run", "--config", "config.toml"]
+                with self.assertRaises(SystemExit) as ctx:
+                    tui_module.run_app()
+                self.assertEqual(2, ctx.exception.code)
             finally:
                 sys.argv = sys_argv
 
@@ -217,7 +259,7 @@ class RunAppTests(unittest.TestCase):
 
             commands = Commands()
 
-        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch.object(tui_module, "FroxlorClient", DummyClient):
+        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch("froxlor_migrator.plan.FroxlorClient", DummyClient):
             sys_argv = sys.argv
             try:
                 sys.argv = [
