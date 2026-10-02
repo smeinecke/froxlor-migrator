@@ -232,7 +232,7 @@ def _build_replay_command(
     include_sender_aliases: bool,
     debug: bool,
 ) -> str:
-    parts: list[str] = ["uv", "run", "python", "main.py", "--config", args.config, "--non-interactive", "--yes"]
+    parts: list[str] = ["froxlor-migrator", "--config", args.config, "--non-interactive", "--yes"]
     parts += _flag_parts(args.apply, "--apply")
     parts += _flag_parts(debug, "--debug")
     parts.append("--whole-customer" if migrate_whole_customer else "--domain-only")
