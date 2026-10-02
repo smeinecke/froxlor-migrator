@@ -651,6 +651,44 @@ def verify_customer_security(client: FroxlorClient, expected_rows: dict[str, Any
         return False
 
 
+def verify_dns_zones(client: FroxlorClient, expected_rows: list[dict[str, Any]]) -> bool:
+    print("Verifying custom DNS zone records...")
+    if not expected_rows:
+        return True
+    all_ok = True
+    zone_cache: dict[str, list[dict[str, Any]]] = {}
+    for item in expected_rows:
+        domain = str(item.get("domain", "")).strip().lower()
+        if not domain:
+            continue
+        if domain not in zone_cache:
+            try:
+                zone_cache[domain] = client.list_domain_zones(domainname=domain)
+            except Exception as e:
+                print(f"  ✗ Could not list zone records for {domain}: {e}")
+                all_ok = False
+                continue
+        existing = {
+            (
+                str(pick(row, "record", default="")).strip().lower(),
+                str(pick(row, "type", default="")).strip().upper(),
+                str(pick(row, "content", default="")).strip(),
+            )
+            for row in zone_cache[domain]
+        }
+        key = (
+            str(item.get("record", "")).strip().lower(),
+            str(item.get("type", "")).strip().upper(),
+            str(item.get("content", "")).strip(),
+        )
+        if key in existing:
+            print(f"  ✓ Zone record verified: {key[0]} {key[1]}")
+        else:
+            print(f"  ✗ Zone record missing on {domain}: {key}")
+            all_ok = False
+    return all_ok
+
+
 def verify_data_dumps(client: FroxlorClient, expected_rows: list[dict[str, Any]]) -> bool:
     print("Verifying DataDump schedules...")
     if not expected_rows:
@@ -809,6 +847,10 @@ def main():
     verifications.append((
         "Dir Options",
         verify_dir_options(client, seed_summary.get("dir_options", [])),
+    ))
+    verifications.append((
+        "DNS Zone Records",
+        verify_dns_zones(client, seed_summary.get("dns_zone_records", [])),
     ))
     verifications.append((
         "Domain Redirects",

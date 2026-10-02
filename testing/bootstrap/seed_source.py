@@ -590,6 +590,38 @@ def ensure_subdomain(api: FroxlorApi, customer_id: int, domain: str, subdomain: 
     return fqdn
 
 
+def ensure_zone_record(
+    api: FroxlorApi,
+    domain: str,
+    record: str,
+    record_type: str,
+    content: str,
+    ttl: int = 18000,
+    prio: int = 0,
+) -> None:
+    rows = api.listing("DomainZones.listing", {"domainname": domain})
+    wanted = (record.strip().lower(), record_type.strip().upper(), content.strip())
+    for row in rows:
+        got = (
+            str(_pick(row, "record", default="")).strip().lower(),
+            str(_pick(row, "type", default="")).strip().upper(),
+            str(_pick(row, "content", default="")).strip(),
+        )
+        if got == wanted:
+            return
+    api.call(
+        "DomainZones.add",
+        {
+            "domainname": domain,
+            "record": record,
+            "type": record_type,
+            "content": content,
+            "ttl": ttl,
+            "prio": prio,
+        },
+    )
+
+
 def ensure_email_forwarder(api: FroxlorApi, customer_id: int, mailbox: str, destination: str) -> None:
     rows = api.call("EmailForwarders.listing", {"emailaddr": mailbox})
     entries = rows.get("list", []) if isinstance(rows, dict) else (rows or [])
@@ -1139,6 +1171,7 @@ def main() -> None:
             "honorcipherorder": True,
             "sessiontickets": False,
             "dkim": True,
+            "isbinddomain": True,
             "description": "secure domain for migration settings test",
         },
     )
@@ -1311,6 +1344,23 @@ def main() -> None:
         db_root_pass=db_root_pass,
         panel_db_name=panel_db_name,
     )
+    ensure_zone_record(
+        api,
+        domain="secure-demo.test",
+        record="migrator-test",
+        record_type="TXT",
+        content="integration-fixture-0001",
+        ttl=18000,
+    )
+    ensure_zone_record(
+        api,
+        domain="secure-demo.test",
+        record="docs",
+        record_type="CNAME",
+        content="secure-demo.test.",
+        ttl=3600,
+    )
+
     set_domain_redirect(
         source_domain="forward-demo.test",
         destination_domain="secure-demo.test",
@@ -1489,6 +1539,21 @@ def main() -> None:
         if data_dump_row
         else [],
         "certificate_domains": cert_domains,
+        "dns_zone_records": [
+            {
+                "domain": "secure-demo.test",
+                "record": "migrator-test",
+                "type": "TXT",
+                # Froxlor encloses TXT content in double quotes on add
+                "content": '"integration-fixture-0001"',
+            },
+            {
+                "domain": "secure-demo.test",
+                "record": "docs",
+                "type": "CNAME",
+                "content": "secure-demo.test.",
+            },
+        ],
         "domain_redirects": [
             {
                 "domain": "forward-demo.test",

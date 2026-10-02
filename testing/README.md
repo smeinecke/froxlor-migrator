@@ -19,6 +19,7 @@ This folder provides a reproducible local test setup for the migrator:
 - one SSH key fixture bound to FTP user `custgammaftp1`
 - one directory-protection fixture and matching directory-options fixture
 - one mail forwarder fixture
+- custom DNS zone records on `secure-demo.test` (TXT + CNAME)
 - one customer 2FA fixture (`custgamma`)
 - one DataDump fixture (created when API endpoint is accessible)
 - mailbox-level rspamd/spam settings test fixtures
@@ -111,7 +112,7 @@ cd testing
 docker compose run --rm --profile bootstrap bootstrap migrate_and_verify
 ```
 
-This performs a real apply migration (files + databases + mailbox content via doveadm) for seeded test customers and then verifies source/target parity. It also injects a probe email into source mailbox `alerts@secure-demo.test` and asserts that the exact probe reaches target after migration. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
+This performs a real apply migration (files + databases + mailbox content via doveadm) for seeded test customers, then repeats the apply after deliberately drifting a target DNS record (exercises the update/dedup paths and `DomainZones.update`), and finally verifies source/target parity. It also injects a probe email into source mailbox `alerts@secure-demo.test` and asserts that the exact probe reaches target after migration. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
 
 ## 5) Use with migrator
 

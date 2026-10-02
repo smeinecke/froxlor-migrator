@@ -59,9 +59,24 @@ verify_mail_probe_target() {
 	fi
 }
 
-migrate_mail_probe_real() {
+drift_target_zone_record() {
+	# Drift the seeded TXT record on the target so the second migration run has
+	# to repair it via the DomainZones.update near-match path (same
+	# record/type/prio/ttl key, different content).
+	docker compose exec -T target-db sh -lc \
+		"MYSQL_PWD='${TARGET_DB_ROOT_PASSWORD:-target-root}' mariadb -u'${TARGET_DB_ROOT_USER:-root}' '${TARGET_DB_NAME:-froxlor}' -e \
+		\"UPDATE domain_dns_entries e JOIN panel_domains d ON d.id=e.domain_id \
+		 SET e.content='drifted-before-second-run' \
+		 WHERE d.domain='secure-demo.test' AND e.record='migrator-test' AND e.type='TXT';\""
+}
+
+run_apply() {
 	docker compose exec -T source-froxlor sh -lc \
-		"doveadm backup -u '$MAILBOX_PROBE' ssh -i /tmp/id_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p '${TARGET_SSH_PORT:-2222}' -l root host.docker.internal 'sudo doveadm dsync-server -u $MAILBOX_PROBE'"
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko /workspace/testing/bootstrap/run_migration_apply.py \
+		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+		--include-mail \
+		--customer custalpha \
+		--customer custgamma"
 }
 
 if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
@@ -131,13 +146,13 @@ wait_api "${TARGET_API_URL}"
 
 seed_mail_probe
 
-docker compose exec -T source-froxlor sh -lc \
-	"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko /workspace/testing/bootstrap/run_migration_apply.py \
-	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
-	--customer custalpha \
-	--customer custgamma"
+run_apply
 
-migrate_mail_probe_real
+# Second run exercises the update/dedup paths for every resource type
+# (domain_exists=update, mailbox_exists=update); the drifted zone record
+# additionally forces DomainZones.update instead of a skip.
+drift_target_zone_record
+run_apply
 
 docker compose exec -T source-froxlor sh -lc \
 	"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko python3 -m froxlor_migrator.verify_migration \
