@@ -237,6 +237,69 @@ def select_rows_by_tokens(
     return selected
 
 
+def select_customers_by_tokens(
+    rows: list[dict],
+    selectors_raw: str | None,
+    selector_values: Callable[[dict], list[str]],
+    selector_label: str,
+) -> list[dict]:
+    """Strict multi-customer resolution: every provided token must match
+    exactly one row. ``all``/``none`` keep their usual meaning.
+
+    Unlike ``select_rows_by_tokens`` a token matching *multiple* customers is
+    an error, not a batch — an ambiguous selector must never silently widen
+    the migration scope.
+    """
+    if selectors_raw is None:
+        return list(rows)
+    tokens = {token.lower() for token in split_csv(selectors_raw)}
+    if not tokens or "all" in tokens:
+        return list(rows)
+    if "none" in tokens:
+        return []
+
+    selected_ids: set[int] = set()
+    errors: list[str] = []
+    for token in sorted(tokens):
+        hits = [row for row in rows if token in {value.strip().lower() for value in selector_values(row) if value}]
+        if not hits:
+            errors.append(f"unknown {selector_label} token '{token}'")
+        elif len(hits) > 1:
+            errors.append(f"{selector_label} token '{token}' is ambiguous ({len(hits)} matches)")
+        else:
+            selected_ids.add(id(hits[0]))
+    if errors:
+        raise ValueError("; ".join(errors))
+    # Keep API listing order — the same order --all-customers would produce.
+    return [row for row in rows if id(row) in selected_ids]
+
+
+def unmatched_tokens(
+    selectors: dict[str, str | None],
+    matched: dict[str, set[str]],
+    php_mapping: dict[str, str] | None = None,
+    ip_mapping: dict[str, str] | None = None,
+) -> list[str]:
+    """Selector/mapping tokens that matched no customer at all.
+
+    Batch selection tolerates per-customer misses; a token matching nothing
+    anywhere is almost always a typo. ``selectors`` maps the same labels used
+    by ``select_customer_resources`` (domain, subdomain, database, mailbox,
+    FTP account) to their raw CSV strings.
+    """
+    missing: list[str] = []
+    for label, raw in selectors.items():
+        provided = {token.lower() for token in split_csv(raw)} - {"all", "none"}
+        left = provided - matched.get(label, set())
+        if left:
+            missing.append(f"{label}: {', '.join(sorted(left))}")
+    for label, raw_map in (("PHP mapping", php_mapping), ("IP mapping", ip_mapping)):
+        left = set(raw_map or {}) - matched.get(label, set())
+        if left:
+            missing.append(f"{label}: {', '.join(sorted(left))}")
+    return missing
+
+
 def flag_parts(enabled: bool, flag: str) -> list[str]:
     return [flag] if enabled else []
 

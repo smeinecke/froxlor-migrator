@@ -409,6 +409,34 @@ class WizardFlowTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_batch_warns_on_unmatched_selector(self) -> None:
+        async def scenario() -> None:
+            app = MigratorWizardApp(
+                config=make_config(),
+                args=make_args(domains="bogus.invalid"),
+                clients=(DummyClient(), DummyClient()),
+                migrator_cls=DummyMigrator,
+                runner_cls=DummyRunner,
+            )
+            async with app.run_test() as pilot:
+                await wait_for_screen(app, CustomerScreen, pilot)
+                widget = app.screen.query_one("#customer-list")
+                widget.select(0)
+                widget.select(1)
+                await pilot.click("#next")
+                await wait_for_screen(app, ModeScreen, pilot)
+                await pilot.click("#next")
+                await wait_for_screen(app, OptionsScreen, pilot)
+                await pilot.click("#next")
+                await wait_for_screen(app, PlanScreen, pilot)
+                await pilot.click("#start")
+                await wait_for_screen(app, ResultScreen, pilot)
+                statuses = {r["login"]: r["status"] for r in app.state.batch_results}
+                self.assertTrue(all(status == "skipped" for status in statuses.values()))
+                self.assertTrue(any("bogus.invalid" in warning for warning in app.state.batch_warnings))
+
+        asyncio.run(scenario())
+
     def test_run_error_shows_manifest_and_unlocks_back(self) -> None:
         async def scenario() -> None:
             class FailingMigrator(DummyMigrator):

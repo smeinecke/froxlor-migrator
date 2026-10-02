@@ -80,7 +80,11 @@ tolerantly per customer: a token matching nothing in some customer is fine, a
 token matching *no* customer aborts before any writes. Customers that end up
 with zero selected domains are skipped. A failing customer doesn't stop the
 batch — the run ends with a per-customer status table and a non-zero exit if
-any failed.
+any failed. Two caveats vs single-customer runs: each comma-separated customer
+token must resolve to *exactly* one customer (an ambiguous selector is an
+error, not a batch), and `--domains none` skips every customer rather than
+migrating resources only — batch mode requires at least one domain per
+customer.
 
 Fully non-interactive (no prompts/TUI):
 

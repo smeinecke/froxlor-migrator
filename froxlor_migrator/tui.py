@@ -37,8 +37,9 @@ from .plan import (
     plan_rows,
     resolve_named_mapping,
     select_customer_resources,
+    select_customers_by_tokens,
     select_rows_by_tokens,
-    split_csv,
+    unmatched_tokens,
 )
 from .transfer import TransferError, TransferRunner
 from .util import as_int, pick, slugify
@@ -127,7 +128,7 @@ def _resolve_source_customers(args: argparse.Namespace, customer_rows: list[dict
 
     if args.source_customer:
         try:
-            selected_rows = select_rows_by_tokens(customer_rows, args.source_customer, customer_selector_values, "source customer")
+            selected_rows = select_customers_by_tokens(customer_rows, args.source_customer, customer_selector_values, "source customer")
         except ValueError as exc:
             console.print(f"[red]Source customer selection error:[/red] {exc}")
             raise SystemExit(1) from exc
@@ -181,10 +182,6 @@ def _resolve_target_customer(args: argparse.Namespace, target: FroxlorClient) ->
     return target_customer
 
 
-def _selector_tokens(raw: str | None) -> set[str]:
-    return {token.lower() for token in split_csv(raw)} - {"all", "none"}
-
-
 def _resource_selectors(args: argparse.Namespace) -> dict[str, str | None]:
     return {
         "domains": args.domains,
@@ -205,17 +202,19 @@ def _build_ip_map(
     if not source_ip_rows:
         return {}, [], []
 
+    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+    raw_mapping = preset_mapping or {}
+    if matched is not None:
+        # Record applicability before the no-target-IPs early return — tokens
+        # that match source rows are "matched" even when nothing can apply.
+        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_ip_rows, id_getter, ip_aliases)
+        matched.setdefault("IP mapping", set()).update(raw_mapping)
+
     target_ips = target.listing("IpsAndPorts.listing")
     target_ip_rows = ip_view(target_ips)
     if not target_ip_rows:
         console.print("[yellow]No target IPs available via API, using Froxlor defaults.[/yellow]")
         return {}, source_ip_rows, []
-
-    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
-    raw_mapping = preset_mapping or {}
-    if matched is not None:
-        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_ip_rows, id_getter, ip_aliases)
-        matched.setdefault("IP mapping", set()).update(raw_mapping)
     try:
         mapping = resolve_named_mapping(
             raw_mapping=raw_mapping,
@@ -285,7 +284,7 @@ def _print_migration_plan(rows: list[tuple[str, str]]) -> None:
     console.print(plan)
 
 
-def _execute_migration(args: argparse.Namespace, migrator: Migrator, runner: TransferRunner, selection: Selection):
+def _execute_migration(migrator: Migrator, runner: TransferRunner, selection: Selection):
     """Run one selection under a progress display. Exceptions propagate — the
     caller decides whether to exit (single) or record-and-continue (batch)."""
     with Progress(
@@ -473,21 +472,18 @@ def _plan_customer(
 def _check_unmatched_tokens(args: argparse.Namespace, matched: dict[str, set[str]], php_mapping_arg: dict[str, str], ip_mapping_arg: dict[str, str]) -> None:
     """Fail the batch if a selector/mapping token matched no customer at all —
     per-customer misses are fine (tolerant), a global miss is a typo."""
-    missing_parts: list[str] = []
-    for label, raw in (
-        ("domain", args.domains),
-        ("subdomain", args.subdomains),
-        ("database", args.databases),
-        ("mailbox", args.mailboxes),
-        ("FTP account", args.ftp_accounts),
-    ):
-        missing = _selector_tokens(raw) - matched.get(label, set())
-        if missing:
-            missing_parts.append(f"{label}: {', '.join(sorted(missing))}")
-    for label, raw_map in (("PHP mapping", php_mapping_arg), ("IP mapping", ip_mapping_arg)):
-        missing = set(raw_map) - matched.get(label, set())
-        if missing:
-            missing_parts.append(f"{label}: {', '.join(sorted(missing))}")
+    missing_parts = unmatched_tokens(
+        {
+            "domain": args.domains,
+            "subdomain": args.subdomains,
+            "database": args.databases,
+            "mailbox": args.mailboxes,
+            "FTP account": args.ftp_accounts,
+        },
+        matched,
+        php_mapping=php_mapping_arg,
+        ip_mapping=ip_mapping_arg,
+    )
     if missing_parts:
         console.print(f"[red]Selector/mapping tokens matched no customer:[/red] {'; '.join(missing_parts)}")
         raise SystemExit(1)
@@ -689,12 +685,19 @@ def _execute_planned(
         runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name, debug=args.debug)
         migrator = Migrator(config=config, source=source, target=target, runner=runner)
         try:
-            context = _execute_migration(args, migrator, runner, item.selection)
+            context = _execute_migration(migrator, runner, item.selection)
         except (MigrationError, FroxlorApiError, TransferError) as exc:
             console.print(f"[red]Migration failed for {login}:[/red] {exc}")
             console.print(f"Manifest: {runner.manifest_path}")
             if not batch:
                 raise SystemExit(1) from exc
+            results.append((login, f"failed: {exc}", None, str(runner.manifest_path)))
+            continue
+        except Exception as exc:  # noqa: BLE001 — batch must record + continue, not strand later customers
+            console.print(f"[red]Unexpected failure for {login}:[/red] {exc}")
+            console.print(f"Manifest: {runner.manifest_path}")
+            if not batch:
+                raise
             results.append((login, f"failed: {exc}", None, str(runner.manifest_path)))
             continue
         results.append((login, "ok", context, str(runner.manifest_path)))

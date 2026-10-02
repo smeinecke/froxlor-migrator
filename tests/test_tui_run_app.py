@@ -370,6 +370,142 @@ class RunAppTests(unittest.TestCase):
         # The typo'd --domains token matched no customer — nothing executed.
         self.assertEqual(executed, [])
 
+    def test_run_app_batch_rejects_ambiguous_customer_token(self) -> None:
+        executed: list[str] = []
+
+        class CollisionClient(DummyClient):
+            def list_customers(self):
+                return [
+                    {"customerid": 1, "loginname": "alice", "email": "alice@example.com", "name": "Alice"},
+                    {"customerid": 2, "loginname": "bob", "email": "bob@example.com", "name": "alice"},
+                ]
+
+        class RecordingMigrator(DummyMigrator):
+            def execute(self, selection):
+                executed.append(selection.customer["loginname"])
+                return SimpleNamespace(target_customer_id=1, source_to_target_db={})
+
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch("froxlor_migrator.plan.FroxlorClient", CollisionClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", RecordingMigrator),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
+            sys_argv = sys.argv
+            try:
+                # "alice" matches alice's login *and* bob's name — ambiguous,
+                # must error instead of silently batching both.
+                sys.argv = ["run", "--config", "config.toml", "--non-interactive", "--yes", "--source-customer", "alice"]
+                with self.assertRaises(SystemExit) as ctx:
+                    tui_module.run_app()
+                self.assertEqual(1, ctx.exception.code)
+            finally:
+                sys.argv = sys_argv
+
+        self.assertEqual(executed, [])
+
+    def test_run_app_batch_domains_none_exits(self) -> None:
+        executed: list[str] = []
+
+        class RecordingMigrator(DummyMigrator):
+            def execute(self, selection):
+                executed.append(selection.customer["loginname"])
+                return SimpleNamespace(target_customer_id=1, source_to_target_db={})
+
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", RecordingMigrator),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
+            sys_argv = sys.argv
+            try:
+                sys.argv = ["run", "--config", "config.toml", "--non-interactive", "--yes", "--all-customers", "--domains", "none"]
+                with self.assertRaises(SystemExit) as ctx:
+                    tui_module.run_app()
+                self.assertEqual(1, ctx.exception.code)
+            finally:
+                sys.argv = sys_argv
+
+        # Batch has no resources-only mode — --domains none leaves nothing to do.
+        self.assertEqual(executed, [])
+
+    def test_build_ip_map_records_matched_before_empty_target(self) -> None:
+        # --ip-map tokens that match source rows count as "matched" even when
+        # the target lists no IPs — otherwise the batch reports a false
+        # "matched no customer" error.
+        class NoIpTarget:
+            def listing(self, _method):
+                return []
+
+        domains = [{"domain": "example.com", "ipsandports": [{"id": 5, "ip": "1.2.3.4", "port": 80, "ssl": 0}]}]
+        matched: dict = {}
+        mapping, _source_rows, target_rows = tui_module._build_ip_map(
+            domains,
+            NoIpTarget(),
+            preset_mapping={"1.2.3.4:80": "9.9.9.9:80"},
+            matched=matched,
+        )
+        self.assertEqual(mapping, {})
+        self.assertEqual(target_rows, [])
+        self.assertEqual(matched["IP mapping"], {"1.2.3.4:80"})
+
     def test_run_app_interactive_requires_tty(self) -> None:
         class DummyConfig:
             class Api:

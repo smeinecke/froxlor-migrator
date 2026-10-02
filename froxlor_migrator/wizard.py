@@ -77,6 +77,7 @@ from .plan import (
     select_customer_resources,
     select_rows_by_tokens,
     subdomain_view,
+    unmatched_tokens,
 )
 from .transfer import TransferRunner
 from .util import as_int, domain_name, ftp_username, mailbox_address, pick, slugify
@@ -126,6 +127,7 @@ class WizardState:
     context: MigrationContext | None = None
     runner: TransferRunner | None = None
     batch_results: list[dict[str, Any]] = field(default_factory=list)
+    batch_warnings: list[str] = field(default_factory=list)
 
     @property
     def is_batch(self) -> bool:
@@ -330,6 +332,8 @@ class CustomerScreen(WizardScreen):
         elif state.args.source_customer and not state.selected_customers:
             picked, _left = match_rows_by_tokens(self._views, state.args.source_customer, customer_selector_values)
             previous_ids = {view["id"] for view in picked}
+            if not picked:
+                self.app.notify(f"--source-customer matched no customer: {state.args.source_customer}", severity="warning")
         elif len(self._views) == 1 and not state.selected_customers:
             previous_ids = {self._views[0]["id"]}
         for idx, view in enumerate(self._views):
@@ -1077,33 +1081,36 @@ class RunScreen(WizardScreen):
         self.query_one("#log", RichLog).write(line)
         self.query_one("#status-line", Static).update(line)
 
-    def _batch_maps(self, sel: dict[str, Any]) -> tuple[dict[int, int], dict[int, int]]:
+    def _batch_maps(
+        self,
+        sel: dict[str, Any],
+        php_arg: dict[str, str],
+        ip_arg: dict[str, str],
+        matched: dict[str, set[str]],
+    ) -> tuple[dict[int, int], dict[int, int]]:
         """Per-customer auto maps plus any --php-map/--ip-map presets applied
         tolerantly (tokens matching nothing in this customer are ignored)."""
         state = self.state
-        php_arg = parse_mapping_arg(state.args.php_map, "--php-map")
-        ip_arg = parse_mapping_arg(state.args.ip_map, "--ip-map")
         id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
 
         php_map: dict[int, int] = {}
-        try:
-            _ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(
-                sel["domains"] + sel["subdomains"], state.source_php_settings, state.target_php_settings
+        _ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(
+            sel["domains"] + sel["subdomains"], state.source_php_settings, state.target_php_settings
+        )
+        php_map = dict(default_map)
+        applicable, _absent = filter_mapping_to_rows(php_arg, source_rows, id_getter, php_setting_aliases)
+        matched.setdefault("PHP mapping", set()).update(applicable)
+        if applicable:
+            php_map.update(
+                resolve_named_mapping(applicable, source_rows, id_getter, php_setting_aliases, target_rows, id_getter, php_setting_aliases, "PHP mapping")
             )
-            php_map = dict(default_map)
-            applicable, _absent = filter_mapping_to_rows(php_arg, source_rows, id_getter, php_setting_aliases)
-            if applicable:
-                php_map.update(
-                    resolve_named_mapping(applicable, source_rows, id_getter, php_setting_aliases, target_rows, id_getter, php_setting_aliases, "PHP mapping")
-                )
-        except ValueError:
-            pass
 
         ip_map: dict[int, int] = {}
         source_ip_rows = collect_ip_mapping_candidates(sel["domains"])
-        if source_ip_rows and state.target_ip_rows:
+        if source_ip_rows:
             applicable, _absent = filter_mapping_to_rows(ip_arg, source_ip_rows, id_getter, ip_aliases)
-            if applicable:
+            matched.setdefault("IP mapping", set()).update(applicable)
+            if applicable and state.target_ip_rows:
                 ip_map = resolve_named_mapping(applicable, source_ip_rows, id_getter, ip_aliases, state.target_ip_rows, id_getter, ip_aliases, "IP mapping")
         return php_map, ip_map
 
@@ -1121,15 +1128,16 @@ class RunScreen(WizardScreen):
             "ftp_accounts": state.args.ftp_accounts,
         }
         results: list[dict[str, Any]] = []
+        matched: dict[str, set[str]] = {}
+        state.batch_warnings = []
+        php_arg = parse_mapping_arg(state.args.php_map, "--php-map")
+        ip_arg = parse_mapping_arg(state.args.ip_map, "--ip-map")
         total = len(state.selected_customers)
         for index, customer in enumerate(state.selected_customers):
             login = str(pick(customer, "loginname", "login", default="customer"))
             prefix = f"[{index + 1}/{total}] {login} — "
             self.app.call_from_thread(self._batch_note, f"━━━ {prefix.rstrip(' —')} planning…")
-            manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
-            runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
-            state.runner = runner
-            manifest = str(getattr(runner, "manifest_path", ""))
+            manifest = ""
             try:
                 if state.source is None or state.target is None:
                     raise MigrationError("clients are not connected")
@@ -1140,18 +1148,23 @@ class RunScreen(WizardScreen):
                     whole_customer=state.whole_customer,
                     source_web_root=state.config.paths.source_web_root,
                     selectors=selectors,
+                    matched=matched,
                 )
                 if not sel["domains"]:
                     self.app.call_from_thread(self._batch_note, f"{prefix}skipped — no matching domains")
                     results.append({"login": login, "status": "skipped", "context": None, "manifest": manifest})
                     continue
+                manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
+                runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
+                state.runner = runner
+                manifest = str(getattr(runner, "manifest_path", ""))
                 if inc.get("dns_zones", True):
                     sel["domain_zones"], zone_errors = fetch_domain_zones(state.source, sel["domain_names"])
                     for error in zone_errors:
                         self.app.call_from_thread(self._batch_note, f"{prefix}zone skipped — {error}")
                 else:
                     sel["domain_zones"] = []
-                php_map, ip_map = self._batch_maps(sel)
+                php_map, ip_map = self._batch_maps(sel, php_arg, ip_arg, matched)
                 selection = build_selection(
                     customer=customer,
                     target_customer=state.target_customer,
@@ -1188,6 +1201,22 @@ class RunScreen(WizardScreen):
             except Exception as exc:  # noqa: BLE001 — one bad customer must not strand the rest of the batch
                 results.append({"login": login, "status": f"failed: {exc}", "context": None, "manifest": manifest})
                 self.app.call_from_thread(self._batch_note, f"{prefix}FAILED — {exc}")
+        missing = unmatched_tokens(
+            {
+                "domain": selectors["domains"],
+                "subdomain": selectors["subdomains"],
+                "database": selectors["databases"],
+                "mailbox": selectors["mailboxes"],
+                "FTP account": selectors["ftp_accounts"],
+            },
+            matched,
+            php_mapping=php_arg,
+            ip_mapping=ip_arg,
+        )
+        for part in missing:
+            warning = f"Selector/mapping tokens matched no customer: {part}"
+            self.app.call_from_thread(self._batch_note, f"WARNING — {warning}")
+            state.batch_warnings.append(warning)
         return results
 
     def _apply_progress(self, step: int, total: int, status: str) -> None:
@@ -1224,6 +1253,8 @@ class ResultScreen(WizardScreen):
         if state.is_batch:
             yield Label("Batch migration finished", id="title")
             yield DataTable(id="batch-results")
+            for warning in state.batch_warnings:
+                yield Static(warning, classes="note")
         else:
             yield Label("Migration completed", id="title")
             yield Static(f"Target customer id: {state.context.target_customer_id if state.context else 'n/a'}")
@@ -1247,7 +1278,7 @@ class ResultScreen(WizardScreen):
                 context = result.get("context")
                 target_id = str(getattr(context, "target_customer_id", "") or "") if context else ""
                 table.add_row(str(result["login"]), str(result["status"]), target_id, str(result["manifest"]))
-                if result["status"] == "failed" or str(result["status"]).startswith("failed"):
+                if str(result["status"]).startswith("failed"):
                     failures += 1
             if failures:
                 self.query_one("#title", Label).update(f"Batch finished — {failures} customer(s) failed")
@@ -1274,6 +1305,7 @@ class ResultScreen(WizardScreen):
         state.context = None
         state.runner = None
         state.batch_results = []
+        state.batch_warnings = []
         state.domain_zones = []
         state.zone_errors = []
         # Pop back to the still-suspended CustomerScreen; clients stay connected.
