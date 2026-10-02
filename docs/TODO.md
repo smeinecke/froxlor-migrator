@@ -774,3 +774,42 @@ New bugs caught by the stronger assertions:
   dead `target_owner_user`/`target_owner_group`/`parallel` keys for
   months. `load_config` now rejects unknown keys per section; the test
   config was cleaned accordingly.
+
+### Round 11 — Real-CLI e2e + ip-map + rename (`98e3386`, `d8e10e4`, `003a866`, `bc0236b`, `506aed2`, `0d51cb8`)
+
+The harness previously built `Selection` objects directly — bypassing
+the real CLI front-end. `run_migration_apply.py` now invokes
+`main.py --non-interactive` so arg parsing, selection, mappings, and
+confirmation get real coverage. New e2e coverage:
+
+- `custalpha` applies with `--ip-map` (secondary ip:port fixtures on
+  both panels; `static-demo.test` is bound to the source secondary IP
+  with an A record containing it). `verify_migration --ip-value-map`
+  translates record content before comparison.
+- Domain-only rename: `wp-demo.test`/`static-demo.test` migrate into a
+  pre-created `custdelta` via `--domain-only --target-customer`;
+  `assert_rename.py` checks ownership reassignment and docroot
+  remapping under the new login.
+
+Bugs the new paths caught:
+
+- `ipandport`/`ssl_ipandport` were sent as `[{"id": N}]` — Froxlor's
+  `validateIpAddresses` `trim()`s each element (PHP 8 TypeError →
+  HTTP 500). Now plain int lists. This path had never run end-to-end.
+- `mysql --batch --raw` remote-CLI fallback parsed raw TSV — a literal
+  tab/newline in a value silently corrupted rows. Now parses batch-mode
+  escapes (`_parse_mysql_batch_output`).
+
+Watch items resolved/closed:
+
+- Replay command assumed source-checkout layout → emits the installed
+  `froxlor-migrator` console script (`003a866`).
+- Whitespace-only domain selector selecting "all" → by design (empty
+  filter = no filter; required for scripting).
+- Subdomain `phpsettingid → 0` → by design (Froxlor's 0 = "inherit
+  parent", which resolves the mapped value automatically).
+
+#### Remaining e2e coverage gaps (accepted/documented)
+
+- Real ACME issuance — `letsencrypt=1` propagation is covered with
+  `le_domain_dnscheck` disabled; no real DNS/ACME on `.test` domains.
