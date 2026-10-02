@@ -534,6 +534,10 @@ class MigratorCore:
         escaped = value.replace("\\", "\\\\").replace("\x00", "\\0").replace("\n", "\\n").replace("\r", "\\r").replace("\x1a", "\\Z").replace("'", "\\'")
         return f"'{escaped}'"
 
+    @staticmethod
+    def _sql_identifier(value: str) -> str:
+        return f"`{value.replace('`', '``')}`"
+
     def _run_source_mysql_query(self, sql: str, database: str) -> list[list[str]]:
         if self.runner.dry_run:
             return []
@@ -875,10 +879,25 @@ class MigratorCore:
             return ["localhost"]
         return hosts
 
+    def _target_mysql_is_mariadb(self) -> bool:
+        cached = getattr(self, "_target_mysql_is_mariadb_cached", None)
+        if cached is not None:
+            return bool(cached)
+        try:
+            rows = self._run_target_mysql_query("SELECT VERSION();", "mysql")
+        except Exception:
+            rows = []
+        version = str(rows[0][0]).lower() if rows and rows[0] else ""
+        # Froxlor deployments are overwhelmingly MariaDB; default to its
+        # syntax when VERSION() cannot be read (e.g. remote-CLI fallback).
+        self._target_mysql_is_mariadb_cached = ("mariadb" in version) or not version
+        return bool(self._target_mysql_is_mariadb_cached)
+
     def _sync_database_login_hashes(self, source_to_target_db: dict[str, str]) -> None:
         if not source_to_target_db:
             return
         source_hashes = self._load_source_database_user_hashes(list(source_to_target_db.keys()))
+        target_is_mariadb = self._target_mysql_is_mariadb()
         statements: list[str] = []
         for source_db, target_db in source_to_target_db.items():
             per_host = source_hashes.get(source_db)
@@ -893,17 +912,20 @@ class MigratorCore:
                     raise MigrationError(f"Source DB login hash empty for database user: {source_db}")
                 if not re.fullmatch(r"[A-Za-z0-9_]+", plugin):
                     raise MigrationError(f"Unsupported SQL auth plugin name for database user {source_db}: {plugin!r}")
-                if plugin == "mysql_native_password":
-                    statements.append(
-                        "ALTER USER IF EXISTS "
-                        f"{self._sql_string_literal(target_db)}@{self._sql_string_literal(host)} "
-                        f"IDENTIFIED BY PASSWORD {self._sql_string_literal(auth_hash)};"
-                    )
-                else:
+                if target_is_mariadb:
+                    # MariaDB: IDENTIFIED VIA <plugin> USING '<hash>'.
                     statements.append(
                         "ALTER USER IF EXISTS "
                         f"{self._sql_string_literal(target_db)}@{self._sql_string_literal(host)} "
                         f"IDENTIFIED VIA {plugin} USING {self._sql_string_literal(auth_hash)};"
+                    )
+                else:
+                    # MySQL 8 removed IDENTIFIED BY PASSWORD; the equivalent
+                    # hash-assignment syntax is IDENTIFIED WITH <plugin> AS.
+                    statements.append(
+                        "ALTER USER IF EXISTS "
+                        f"{self._sql_string_literal(target_db)}@{self._sql_string_literal(host)} "
+                        f"IDENTIFIED WITH {plugin} AS {self._sql_string_literal(auth_hash)};"
                     )
         if not statements:
             return
