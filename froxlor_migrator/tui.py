@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
@@ -14,6 +15,8 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
 from .migrate import MigrationError, Migrator, Selection
 from .plan import (
+    batch_summary_row,
+    build_batch_replay_command,
     build_clients,
     build_ip_mapping_tokens,
     build_php_mapping_tokens,
@@ -21,24 +24,24 @@ from .plan import (
     build_selection,
     collect_ip_mapping_candidates,
     collect_php_mapping_candidates,
+    customer_selector_token,
     customer_selector_values,
     customer_view,
-    derive_scoped_resources,
     discover_customer_resources,
-    domain_in_source_root,
     fetch_domain_zones,
+    filter_mapping_to_rows,
     ip_aliases,
     ip_view,
-    mail_view,
-    narrow_subdomains,
     parse_mapping_arg,
     php_setting_aliases,
     plan_rows,
     resolve_named_mapping,
+    select_customer_resources,
     select_rows_by_tokens,
+    split_csv,
 )
 from .transfer import TransferError, TransferRunner
-from .util import as_int, domain_name, ftp_username, mailbox_address, pick, slugify
+from .util import as_int, pick, slugify
 
 console = Console()
 
@@ -50,7 +53,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Enable verbose manifest debug tracing")
     parser.add_argument("--non-interactive", action="store_true", help="Run without prompts; use defaults and CLI selections")
     parser.add_argument("--yes", action="store_true", help="Skip final confirmation prompt and start migration")
-    parser.add_argument("--source-customer", help="Source customer selector (id, login, name, or email)")
+    parser.add_argument(
+        "--source-customer",
+        help="Source customer selector (id, login, name, or email; comma-separated for batch)",
+    )
+    parser.add_argument("--all-customers", action="store_true", help="Migrate every source customer (batch mode)")
     parser.add_argument("--target-customer", help="Target customer selector for domain-only mode (id, login, name, email, or 'new')")
     parser.add_argument("--domain-only", action="store_true", help="Disable whole-customer mode")
     parser.add_argument("--whole-customer", action="store_true", help="Enable whole-customer mode")
@@ -106,24 +113,33 @@ def _parse_mapping_args(args: argparse.Namespace) -> tuple[dict[str, str], dict[
         raise SystemExit(1) from exc
 
 
-def _resolve_source_customer(args: argparse.Namespace, customer_rows: list[dict]) -> dict[str, Any]:
-    """Headless source-customer resolution: --source-customer, else the single
-    available customer, else an error."""
+def _resolve_source_customers(args: argparse.Namespace, customer_rows: list[dict]) -> list[dict]:
+    """Headless source-customer resolution: --all-customers, --source-customer
+    (comma-separated allowed), else the single available customer, else error."""
+    if args.all_customers:
+        if args.source_customer:
+            console.print("[red]Use only one of --all-customers or --source-customer.[/red]")
+            raise SystemExit(1)
+        if not customer_rows:
+            console.print("[red]No source customers found.[/red]")
+            raise SystemExit(1)
+        return [row["_raw"] for row in customer_rows]
+
     if args.source_customer:
         try:
             selected_rows = select_rows_by_tokens(customer_rows, args.source_customer, customer_selector_values, "source customer")
         except ValueError as exc:
             console.print(f"[red]Source customer selection error:[/red] {exc}")
             raise SystemExit(1) from exc
-        if len(selected_rows) != 1:
-            console.print("[red]--source-customer must resolve to exactly one customer.[/red]")
+        if not selected_rows:
+            console.print("[red]--source-customer resolved to no customers.[/red]")
             raise SystemExit(1)
-        return selected_rows[0]["_raw"]
+        return [row["_raw"] for row in selected_rows]
 
     if len(customer_rows) != 1:
         console.print("[red]Non-interactive mode requires --source-customer when multiple source customers exist.[/red]")
         raise SystemExit(1)
-    return customer_rows[0]["_raw"]
+    return [customer_rows[0]["_raw"]]
 
 
 def _resolve_mode(args: argparse.Namespace) -> bool:
@@ -165,131 +181,17 @@ def _resolve_target_customer(args: argparse.Namespace, target: FroxlorClient) ->
     return target_customer
 
 
-def _domain_selector(row: dict) -> list[str]:
-    return [domain_name(row)]
+def _selector_tokens(raw: str | None) -> set[str]:
+    return {token.lower() for token in split_csv(raw)} - {"all", "none"}
 
 
-def _select_domains(args: argparse.Namespace, domains: list[dict], migrate_whole_customer: bool, source_web_root: str) -> list[dict]:
-    if migrate_whole_customer:
-        selected_domains = [d for d in domains if domain_in_source_root(d, source_web_root)]
-        skipped = len(domains) - len(selected_domains)
-        if skipped > 0:
-            console.print(f"[yellow]Skipped {skipped} domain(s) outside source_web_root {source_web_root}[/yellow]")
-        candidates = selected_domains
-    else:
-        candidates = domains
-
-    if args.domains is not None:
-        try:
-            return select_rows_by_tokens(candidates, args.domains, _domain_selector, "domain")
-        except ValueError as exc:
-            console.print(f"[red]Domain selection error:[/red] {exc}")
-            raise SystemExit(1) from exc
-    return list(candidates)
-
-
-def _select_whole_customer_resources(
-    args: argparse.Namespace,
-    dbs: list[dict],
-    emails: list[dict],
-    ftps: list[dict],
-    subdomains: list[dict],
-) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    try:
-        selected_databases = select_rows_by_tokens(
-            dbs,
-            args.databases,
-            lambda row: [str(pick(row, "databasename", "dbname", default=""))],
-            "database",
-        )
-        selected_mailboxes = select_rows_by_tokens(
-            emails,
-            args.mailboxes,
-            lambda row: [mailbox_address(row)],
-            "mailbox",
-        )
-        selected_ftps = select_rows_by_tokens(
-            ftps,
-            args.ftp_accounts,
-            lambda row: [ftp_username(row)],
-            "FTP account",
-        )
-        selected_subdomains = select_rows_by_tokens(
-            subdomains,
-            args.subdomains,
-            _domain_selector,
-            "subdomain",
-        )
-    except ValueError as exc:
-        console.print(f"[red]Selection error:[/red] {exc}")
-        raise SystemExit(1) from exc
-    return selected_databases, selected_mailboxes, selected_ftps, selected_subdomains
-
-
-def _select_domain_resources(
-    args: argparse.Namespace,
-    resources: dict[str, list[dict]],
-    selected_subdomains: list[dict],
-    mailbox_domain_names: set[str],
-) -> tuple[list[dict], list[dict], list[dict], list[dict]]:
-    """Domain-only mode headless selection: explicit --* filters or all
-    candidates."""
-    try:
-        selected_databases = select_rows_by_tokens(
-            resources["dbs"],
-            args.databases,
-            lambda row: [str(pick(row, "databasename", "dbname", default=""))],
-            "database",
-        )
-        mailbox_candidates = mail_view(resources["emails"], mailbox_domain_names)
-        selected_mailboxes = [
-            x.get("_raw", x) for x in select_rows_by_tokens(mailbox_candidates, args.mailboxes, lambda row: [str(row.get("email", ""))], "mailbox")
-        ]
-        selected_subdomains = select_rows_by_tokens(selected_subdomains, args.subdomains, _domain_selector, "subdomain")
-        selected_ftps = select_rows_by_tokens(
-            resources["ftps"],
-            args.ftp_accounts,
-            lambda row: [ftp_username(row)],
-            "FTP account",
-        )
-    except ValueError as exc:
-        console.print(f"[red]Selection error:[/red] {exc}")
-        raise SystemExit(1) from exc
-    return selected_databases, selected_mailboxes, selected_ftps, selected_subdomains
-
-
-def _select_resources(
-    args: argparse.Namespace,
-    resources: dict[str, list[dict]],
-    migrate_whole_customer: bool,
-    selected_domains: list[dict],
-    subdomains: list[dict],
-) -> dict[str, Any]:
-    """Choose every per-resource collection after domains are known.
-
-    Subdomains are first narrowed to children of the selected domains."""
-    selected_domain_names = {domain_name(domain) for domain in selected_domains}
-    narrowed_subdomains = narrow_subdomains(subdomains, selected_domain_names)
-
-    if migrate_whole_customer:
-        selected_databases, selected_mailboxes, selected_ftps, selected_subdomains = _select_whole_customer_resources(
-            args, resources["dbs"], resources["emails"], resources["ftps"], narrowed_subdomains
-        )
-    else:
-        mailbox_domain_names = selected_domain_names | {domain_name(row) for row in narrowed_subdomains if domain_name(row)}
-        selected_databases, selected_mailboxes, selected_ftps, selected_subdomains = _select_domain_resources(
-            args, resources, narrowed_subdomains, mailbox_domain_names
-        )
-
-    scoped = derive_scoped_resources(resources, selected_mailboxes, selected_ftps)
+def _resource_selectors(args: argparse.Namespace) -> dict[str, str | None]:
     return {
-        "domains": selected_domains,
-        "subdomains": selected_subdomains,
-        "databases": selected_databases,
-        "mailboxes": selected_mailboxes,
-        "ftps": selected_ftps,
-        "domain_names": selected_domain_names,
-        **scoped,
+        "domains": args.domains,
+        "subdomains": args.subdomains,
+        "databases": args.databases,
+        "mailboxes": args.mailboxes,
+        "ftp_accounts": args.ftp_accounts,
     }
 
 
@@ -297,6 +199,7 @@ def _build_ip_map(
     selected_domains: list[dict],
     target: FroxlorClient,
     preset_mapping: dict[str, str] | None = None,
+    matched: dict[str, set[str]] | None = None,
 ) -> tuple[dict[int, int], list[dict], list[dict]]:
     source_ip_rows = collect_ip_mapping_candidates(selected_domains)
     if not source_ip_rows:
@@ -308,14 +211,19 @@ def _build_ip_map(
         console.print("[yellow]No target IPs available via API, using Froxlor defaults.[/yellow]")
         return {}, source_ip_rows, []
 
+    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+    raw_mapping = preset_mapping or {}
+    if matched is not None:
+        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_ip_rows, id_getter, ip_aliases)
+        matched.setdefault("IP mapping", set()).update(raw_mapping)
     try:
         mapping = resolve_named_mapping(
-            raw_mapping=preset_mapping or {},
+            raw_mapping=raw_mapping,
             source_rows=source_ip_rows,
-            source_value_getter=lambda row: as_int(pick(row, "id", default=0)),
+            source_value_getter=id_getter,
             source_alias_getter=ip_aliases,
             target_rows=target_ip_rows,
-            target_value_getter=lambda row: as_int(pick(row, "id", default=0)),
+            target_value_getter=id_getter,
             target_alias_getter=ip_aliases,
             mapping_label="IP mapping",
         )
@@ -331,18 +239,24 @@ def _build_php_setting_map(
     source_settings: list[dict],
     target_settings: list[dict],
     preset_mapping: dict[str, str] | None = None,
+    matched: dict[str, set[str]] | None = None,
 ) -> tuple[dict[int, int], list[dict]]:
     source_ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(selected_domains, source_settings, target_settings)
     if not source_ids:
         return {}, []
+    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+    raw_mapping = preset_mapping or {}
+    if matched is not None:
+        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_rows, id_getter, php_setting_aliases)
+        matched.setdefault("PHP mapping", set()).update(raw_mapping)
     try:
         mapping = resolve_named_mapping(
-            raw_mapping=preset_mapping or {},
+            raw_mapping=raw_mapping,
             source_rows=source_rows,
-            source_value_getter=lambda row: as_int(pick(row, "id", default=0)),
+            source_value_getter=id_getter,
             source_alias_getter=php_setting_aliases,
             target_rows=target_rows,
-            target_value_getter=lambda row: as_int(pick(row, "id", default=0)),
+            target_value_getter=id_getter,
             target_alias_getter=php_setting_aliases,
             mapping_label="PHP mapping",
         )
@@ -372,35 +286,32 @@ def _print_migration_plan(rows: list[tuple[str, str]]) -> None:
 
 
 def _execute_migration(args: argparse.Namespace, migrator: Migrator, runner: TransferRunner, selection: Selection):
-    try:
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            task_id = progress.add_task("Starting migration", total=1)
-            last_progress_line: str | None = None
+    """Run one selection under a progress display. Exceptions propagate — the
+    caller decides whether to exit (single) or record-and-continue (batch)."""
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("Starting migration", total=1)
+        last_progress_line: str | None = None
 
-            def _on_progress(step: int, total: int, status: str) -> None:
-                nonlocal last_progress_line
-                progress.update(task_id, total=max(total, 1), completed=step, description=f"[cyan]{status}[/cyan]")
-                runner.progress_event(step, max(total, 1), status)
-                line = f"Progress {step}/{max(total, 1)}: {status}"
-                if line != last_progress_line:
-                    console.print(line)
-                    last_progress_line = line
+        def _on_progress(step: int, total: int, status: str) -> None:
+            nonlocal last_progress_line
+            progress.update(task_id, total=max(total, 1), completed=step, description=f"[cyan]{status}[/cyan]")
+            runner.progress_event(step, max(total, 1), status)
+            line = f"Progress {step}/{max(total, 1)}: {status}"
+            if line != last_progress_line:
+                console.print(line)
+                last_progress_line = line
 
-            migrator.set_progress_callback(_on_progress)
-            context = migrator.execute(selection)
-            progress.update(task_id, completed=progress.tasks[0].total, description="[green]Migration completed[/green]")
-        return context
-    except (MigrationError, FroxlorApiError, TransferError) as exc:
-        console.print(f"[red]Migration failed:[/red] {exc}")
-        console.print(f"Manifest: {runner.manifest_path}")
-        raise SystemExit(1) from exc
+        migrator.set_progress_callback(_on_progress)
+        context = migrator.execute(selection)
+        progress.update(task_id, completed=progress.tasks[0].total, description="[green]Migration completed[/green]")
+    return context
 
 
 def _print_migration_result(context, runner: TransferRunner) -> None:
@@ -416,51 +327,85 @@ def _print_migration_result(context, runner: TransferRunner) -> None:
     console.print(f"Manifest: {runner.manifest_path}")
 
 
-def _run_headless(args: argparse.Namespace, config) -> None:
-    dry_run = _resolve_dry_run(args, config)
-    source, target = build_clients(config)
+@dataclass
+class _PlannedCustomer:
+    """Everything needed to execute one customer's migration."""
 
-    console.print("[bold]Froxlor Migrator[/bold]")
-    console.print(f"Mode: {'[yellow]dry-run[/yellow]' if dry_run else '[green]apply[/green]'}")
-    if args.debug:
-        console.print("Debug: [green]enabled[/green]")
+    customer: dict
+    sel: dict[str, Any]
+    selection: Selection
+    php_setting_map: dict[int, int]
+    ip_mapping: dict[int, int]
+    source_php_rows: list[dict]
+    source_ip_rows: list[dict]
+    target_ip_rows: list[dict]
 
-    php_mapping_arg, ip_mapping_arg = _parse_mapping_args(args)
+
+def _include_flags(args: argparse.Namespace) -> dict[str, bool]:
+    return {
+        "files": _resolve_include_flag(args.include_files),
+        "databases": _resolve_include_flag(args.include_databases),
+        "mail": _resolve_include_flag(args.include_mail),
+        "certificates": not args.skip_certificates,
+        "domain_zones": not args.skip_dns_zones,
+        "password_sync": not args.skip_password_sync,
+        "forwarders": not args.skip_forwarders,
+        "sender_aliases": not args.skip_sender_aliases,
+        "subdomains": not args.skip_subdomains,
+        "validate_db_names": not args.skip_database_name_validation,
+    }
+
+
+def _plan_customer(
+    args: argparse.Namespace,
+    config,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    customer: dict,
+    *,
+    migrate_whole_customer: bool,
+    target_customer: dict | None,
+    php_mapping_arg: dict[str, str],
+    ip_mapping_arg: dict[str, str],
+    source_php_settings: list[dict],
+    target_php_settings: list[dict],
+    includes: dict[str, bool],
+    matched: dict[str, set[str]] | None,
+) -> _PlannedCustomer | None:
+    """Discover + select + map + build the Selection for one customer.
+
+    Returns ``None`` when the customer ends up with no selected domains in
+    batch (tolerant) mode — in strict mode an empty/unmatched selection raises
+    via SystemExit instead.
+    """
+    login = str(pick(customer, "loginname", "login", default=""))
+    customer_id = as_int(pick(customer, "customerid", "id", default=0))
 
     try:
-        customers = source.list_customers()
+        resources = discover_customer_resources(source, customer_id, login)
     except FroxlorApiError as exc:
-        console.print(f"[red]API error while listing customers:[/red] {exc}")
+        console.print(f"[red]API discovery error for {login}:[/red] {exc}")
         raise SystemExit(1) from exc
-
-    selected_customer = _resolve_source_customer(args, customer_view(customers))
-    customer_id = as_int(pick(selected_customer, "customerid", "id", default=0))
-    customer_login = str(pick(selected_customer, "loginname", "login", default=""))
 
     try:
-        resources = discover_customer_resources(source, customer_id, customer_login)
-        source_php_settings = source.list_php_settings()
-        target_php_settings = target.list_php_settings()
-    except FroxlorApiError as exc:
-        console.print(f"[red]API discovery error:[/red] {exc}")
+        sel = select_customer_resources(
+            resources,
+            whole_customer=migrate_whole_customer,
+            source_web_root=config.paths.source_web_root,
+            selectors=_resource_selectors(args),
+            strict=matched is None,
+            matched=matched,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Selection error for {login}:[/red] {exc}")
         raise SystemExit(1) from exc
+    if sel["skipped_out_root"]:
+        console.print(f"[yellow]Skipped {sel['skipped_out_root']} domain(s) outside source_web_root {config.paths.source_web_root}[/yellow]")
 
-    migrate_whole_customer = _resolve_mode(args)
+    if not sel["domains"] and matched is not None:
+        return None
 
-    target_customer = None
-    if not migrate_whole_customer:
-        target_customer = _resolve_target_customer(args, target)
-
-    selected_domains = _select_domains(args, resources["domains"], migrate_whole_customer, config.paths.source_web_root)
-    sel = _select_resources(args, resources, migrate_whole_customer, selected_domains, resources["subdomains"])
-
-    include_certificates = not args.skip_certificates
-    include_domain_zones = not args.skip_dns_zones
-    include_password_sync = not args.skip_password_sync
-    include_forwarders = not args.skip_forwarders
-    include_sender_aliases = not args.skip_sender_aliases
-
-    if include_domain_zones:
+    if includes["domain_zones"]:
         sel["domain_zones"], zone_errors = fetch_domain_zones(source, sel["domain_names"])
         for error in zone_errors:
             console.print(f"[yellow]Skipping DNS zone for {error}[/yellow]")
@@ -468,96 +413,25 @@ def _run_headless(args: argparse.Namespace, config) -> None:
         sel["domain_zones"] = []
 
     try:
-        php_setting_map, source_selected_php_settings = _build_php_setting_map(
+        php_setting_map, source_php_rows = _build_php_setting_map(
             sel["domains"] + sel["subdomains"],
             source_php_settings,
             target_php_settings,
             preset_mapping=php_mapping_arg,
+            matched=matched,
         )
         ip_mapping, source_ip_rows, target_ip_rows = _build_ip_map(
             sel["domains"],
             target,
             preset_mapping=ip_mapping_arg,
+            matched=matched,
         )
     except FroxlorApiError as exc:
-        console.print(f"[red]IP discovery/mapping error:[/red] {exc}")
+        console.print(f"[red]IP discovery/mapping error for {login}:[/red] {exc}")
         raise SystemExit(1) from exc
 
-    include_files = _resolve_include_flag(args.include_files)
-    include_databases = _resolve_include_flag(args.include_databases)
-    include_mail = _resolve_include_flag(args.include_mail)
-
-    include_subdomains = not args.skip_subdomains
-    validate_database_names = not args.skip_database_name_validation
-
-    _print_migration_plan(
-        plan_rows(
-            selected_domains=sel["domains"],
-            selected_subdomains=sel["subdomains"],
-            selected_databases=sel["databases"],
-            selected_mailboxes=sel["mailboxes"],
-            selected_forwarders=sel["forwarders"],
-            selected_sender_aliases=sel["sender_aliases"],
-            selected_ftps=sel["ftps"],
-            selected_ssh_keys=sel["ssh_keys"],
-            selected_data_dumps=sel["data_dumps"],
-            selected_dir_protections=sel["dir_protections"],
-            selected_dir_options=sel["dir_options"],
-            selected_domain_zones=sel["domain_zones"],
-            migrate_whole_customer=migrate_whole_customer,
-            php_setting_map=php_setting_map,
-            ip_mapping=ip_mapping,
-            include_files=include_files,
-            include_databases=include_databases,
-            include_mail=include_mail,
-            include_certificates=include_certificates,
-            include_domain_zones=include_domain_zones,
-            include_password_sync=include_password_sync,
-            include_forwarders=include_forwarders,
-            include_sender_aliases=include_sender_aliases,
-            include_subdomains=include_subdomains,
-            validate_database_names=validate_database_names,
-            debug=args.debug,
-            dry_run=dry_run,
-        )
-    )
-
-    php_mapping_tokens = build_php_mapping_tokens(php_setting_map, source_selected_php_settings, target_php_settings)
-    ip_mapping_tokens = build_ip_mapping_tokens(ip_mapping, source_ip_rows, target_ip_rows)
-    replay_command = build_replay_command(
-        config_path=args.config,
-        apply=args.apply,
-        debug=args.debug,
-        migrate_whole_customer=migrate_whole_customer,
-        selected_customer=selected_customer,
-        target_customer=target_customer,
-        selected_domains=sel["domains"],
-        selected_subdomains=sel["subdomains"],
-        selected_databases=sel["databases"],
-        selected_mailboxes=sel["mailboxes"],
-        selected_ftps=sel["ftps"],
-        php_mapping_tokens=php_mapping_tokens,
-        ip_mapping_tokens=ip_mapping_tokens,
-        include_files=include_files,
-        include_databases=include_databases,
-        include_mail=include_mail,
-        include_certificates=include_certificates,
-        include_domain_zones=include_domain_zones,
-        include_password_sync=include_password_sync,
-        include_forwarders=include_forwarders,
-        include_sender_aliases=include_sender_aliases,
-        skip_subdomains=args.skip_subdomains,
-        skip_database_name_validation=args.skip_database_name_validation,
-    )
-    console.print("[bold]Replay command (same selection, non-interactive):[/bold]")
-    console.print(replay_command)
-
-    manifest_name = slugify(f"{pick(selected_customer, 'loginname', 'login', default='customer')}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-    runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name, debug=args.debug)
-    migrator = Migrator(config=config, source=source, target=target, runner=runner)
-
     selection = build_selection(
-        customer=selected_customer,
+        customer=customer,
         target_customer=target_customer,
         domains=sel["domains"],
         subdomains=sel["subdomains"],
@@ -571,22 +445,344 @@ def _run_headless(args: argparse.Namespace, config) -> None:
         dir_protections=sel["dir_protections"],
         dir_options=sel["dir_options"],
         domain_zones=sel["domain_zones"],
-        include_files=include_files,
-        include_databases=include_databases,
-        include_mail=include_mail,
-        include_subdomains=include_subdomains,
-        validate_database_names=validate_database_names,
+        include_files=includes["files"],
+        include_databases=includes["databases"],
+        include_mail=includes["mail"],
+        include_subdomains=includes["subdomains"],
+        validate_database_names=includes["validate_db_names"],
         php_setting_map=php_setting_map,
         ip_mapping=ip_mapping,
-        include_certificates=include_certificates,
-        include_domain_zones=include_domain_zones,
-        include_password_sync=include_password_sync,
-        include_forwarders=include_forwarders,
-        include_sender_aliases=include_sender_aliases,
+        include_certificates=includes["certificates"],
+        include_domain_zones=includes["domain_zones"],
+        include_password_sync=includes["password_sync"],
+        include_forwarders=includes["forwarders"],
+        include_sender_aliases=includes["sender_aliases"],
+    )
+    return _PlannedCustomer(
+        customer=customer,
+        sel=sel,
+        selection=selection,
+        php_setting_map=php_setting_map,
+        ip_mapping=ip_mapping,
+        source_php_rows=source_php_rows,
+        source_ip_rows=source_ip_rows,
+        target_ip_rows=target_ip_rows,
     )
 
-    context = _execute_migration(args, migrator, runner, selection)
-    _print_migration_result(context, runner)
+
+def _check_unmatched_tokens(args: argparse.Namespace, matched: dict[str, set[str]], php_mapping_arg: dict[str, str], ip_mapping_arg: dict[str, str]) -> None:
+    """Fail the batch if a selector/mapping token matched no customer at all —
+    per-customer misses are fine (tolerant), a global miss is a typo."""
+    missing_parts: list[str] = []
+    for label, raw in (
+        ("domain", args.domains),
+        ("subdomain", args.subdomains),
+        ("database", args.databases),
+        ("mailbox", args.mailboxes),
+        ("FTP account", args.ftp_accounts),
+    ):
+        missing = _selector_tokens(raw) - matched.get(label, set())
+        if missing:
+            missing_parts.append(f"{label}: {', '.join(sorted(missing))}")
+    for label, raw_map in (("PHP mapping", php_mapping_arg), ("IP mapping", ip_mapping_arg)):
+        missing = set(raw_map) - matched.get(label, set())
+        if missing:
+            missing_parts.append(f"{label}: {', '.join(sorted(missing))}")
+    if missing_parts:
+        console.print(f"[red]Selector/mapping tokens matched no customer:[/red] {'; '.join(missing_parts)}")
+        raise SystemExit(1)
+
+
+def _print_batch_plan(planned: list[_PlannedCustomer], includes: dict[str, bool], migrate_whole_customer: bool, dry_run: bool) -> None:
+    plan = Table(title=f"Batch migration plan — {len(planned)} customers")
+    for column in ("Customer", "Domains", "Subdomains", "Databases", "Mailboxes", "FTP", "Zone recs"):
+        plan.add_column(column)
+    for item in planned:
+        plan.add_row(*batch_summary_row(item.customer, item.sel))
+    console.print(plan)
+    flags = Table(title="Shared options")
+    flags.add_column("Option")
+    flags.add_column("Value")
+    flags.add_row("Mode", "whole-customer" if migrate_whole_customer else "domain-only")
+    for key, value in includes.items():
+        flags.add_row(key, "yes" if value else "no")
+    flags.add_row("Dry-run", "yes" if dry_run else "no")
+    console.print(flags)
+
+
+def _plan_all_customers(
+    args: argparse.Namespace,
+    config,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    selected_customers: list[dict],
+    *,
+    migrate_whole_customer: bool,
+    target_customer: dict | None,
+    php_mapping_arg: dict[str, str],
+    ip_mapping_arg: dict[str, str],
+    source_php_settings: list[dict],
+    target_php_settings: list[dict],
+    includes: dict[str, bool],
+    batch: bool,
+) -> list[_PlannedCustomer]:
+    matched: dict[str, set[str]] | None = {} if batch else None
+    planned: list[_PlannedCustomer] = []
+    for customer in selected_customers:
+        login = str(pick(customer, "loginname", "login", default=""))
+        if batch:
+            console.print(f"[bold]Planning {login}…[/bold]")
+        item = _plan_customer(
+            args,
+            config,
+            source,
+            target,
+            customer,
+            migrate_whole_customer=migrate_whole_customer,
+            target_customer=target_customer,
+            php_mapping_arg=php_mapping_arg,
+            ip_mapping_arg=ip_mapping_arg,
+            source_php_settings=source_php_settings,
+            target_php_settings=target_php_settings,
+            includes=includes,
+            matched=matched,
+        )
+        if item is None:
+            console.print(f"[yellow]Skipping {login}: no matching domains.[/yellow]")
+            continue
+        planned.append(item)
+
+    if matched is not None:
+        _check_unmatched_tokens(args, matched, php_mapping_arg, ip_mapping_arg)
+    if not planned:
+        console.print("[red]Nothing to migrate: no customer produced a selection.[/red]")
+        raise SystemExit(1)
+    return planned
+
+
+def _print_single_plan_and_replay(
+    args: argparse.Namespace,
+    item: _PlannedCustomer,
+    *,
+    migrate_whole_customer: bool,
+    target_customer: dict | None,
+    target_php_settings: list[dict],
+    includes: dict[str, bool],
+    dry_run: bool,
+) -> None:
+    _print_migration_plan(
+        plan_rows(
+            selected_domains=item.sel["domains"],
+            selected_subdomains=item.sel["subdomains"],
+            selected_databases=item.sel["databases"],
+            selected_mailboxes=item.sel["mailboxes"],
+            selected_forwarders=item.sel["forwarders"],
+            selected_sender_aliases=item.sel["sender_aliases"],
+            selected_ftps=item.sel["ftps"],
+            selected_ssh_keys=item.sel["ssh_keys"],
+            selected_data_dumps=item.sel["data_dumps"],
+            selected_dir_protections=item.sel["dir_protections"],
+            selected_dir_options=item.sel["dir_options"],
+            selected_domain_zones=item.sel["domain_zones"],
+            migrate_whole_customer=migrate_whole_customer,
+            php_setting_map=item.php_setting_map,
+            ip_mapping=item.ip_mapping,
+            include_files=includes["files"],
+            include_databases=includes["databases"],
+            include_mail=includes["mail"],
+            include_certificates=includes["certificates"],
+            include_domain_zones=includes["domain_zones"],
+            include_password_sync=includes["password_sync"],
+            include_forwarders=includes["forwarders"],
+            include_sender_aliases=includes["sender_aliases"],
+            include_subdomains=includes["subdomains"],
+            validate_database_names=includes["validate_db_names"],
+            debug=args.debug,
+            dry_run=dry_run,
+        )
+    )
+    replay_command = build_replay_command(
+        config_path=args.config,
+        apply=args.apply,
+        debug=args.debug,
+        migrate_whole_customer=migrate_whole_customer,
+        selected_customer=item.customer,
+        target_customer=target_customer,
+        selected_domains=item.sel["domains"],
+        selected_subdomains=item.sel["subdomains"],
+        selected_databases=item.sel["databases"],
+        selected_mailboxes=item.sel["mailboxes"],
+        selected_ftps=item.sel["ftps"],
+        php_mapping_tokens=build_php_mapping_tokens(item.php_setting_map, item.source_php_rows, target_php_settings),
+        ip_mapping_tokens=build_ip_mapping_tokens(item.ip_mapping, item.source_ip_rows, item.target_ip_rows),
+        include_files=includes["files"],
+        include_databases=includes["databases"],
+        include_mail=includes["mail"],
+        include_certificates=includes["certificates"],
+        include_domain_zones=includes["domain_zones"],
+        include_password_sync=includes["password_sync"],
+        include_forwarders=includes["forwarders"],
+        include_sender_aliases=includes["sender_aliases"],
+        skip_subdomains=args.skip_subdomains,
+        skip_database_name_validation=args.skip_database_name_validation,
+    )
+    console.print("[bold]Replay command (same selection, non-interactive):[/bold]")
+    console.print(replay_command)
+
+
+def _print_batch_plan_and_replay(
+    args: argparse.Namespace,
+    planned: list[_PlannedCustomer],
+    *,
+    migrate_whole_customer: bool,
+    target_customer: dict | None,
+    includes: dict[str, bool],
+    dry_run: bool,
+) -> None:
+    _print_batch_plan(planned, includes, migrate_whole_customer, dry_run)
+    replay_command = build_batch_replay_command(
+        config_path=args.config,
+        apply=args.apply,
+        debug=args.debug,
+        migrate_whole_customer=migrate_whole_customer,
+        customer_tokens=[customer_selector_token(item.customer) for item in planned],
+        all_customers=bool(args.all_customers),
+        target_customer=target_customer,
+        domains_arg=args.domains,
+        subdomains_arg=args.subdomains,
+        databases_arg=args.databases,
+        mailboxes_arg=args.mailboxes,
+        ftp_accounts_arg=args.ftp_accounts,
+        php_map_arg=args.php_map,
+        ip_map_arg=args.ip_map,
+        include_files=includes["files"],
+        include_databases=includes["databases"],
+        include_mail=includes["mail"],
+        include_certificates=includes["certificates"],
+        include_domain_zones=includes["domain_zones"],
+        include_password_sync=includes["password_sync"],
+        include_forwarders=includes["forwarders"],
+        include_sender_aliases=includes["sender_aliases"],
+        skip_subdomains=args.skip_subdomains,
+        skip_database_name_validation=args.skip_database_name_validation,
+    )
+    console.print("[bold]Replay command (same batch, non-interactive):[/bold]")
+    console.print(replay_command)
+
+
+def _execute_planned(
+    args: argparse.Namespace,
+    config,
+    source: FroxlorClient,
+    target: FroxlorClient,
+    planned: list[_PlannedCustomer],
+    *,
+    batch: bool,
+    dry_run: bool,
+) -> None:
+    results: list[tuple[str, str, Any, str]] = []  # (login, status, context, manifest)
+    for index, item in enumerate(planned):
+        login = str(pick(item.customer, "loginname", "login", default="customer"))
+        if batch:
+            console.print(f"[bold cyan]━━━ [{index + 1}/{len(planned)}] {login} ━━━[/bold cyan]")
+        manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
+        runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name, debug=args.debug)
+        migrator = Migrator(config=config, source=source, target=target, runner=runner)
+        try:
+            context = _execute_migration(args, migrator, runner, item.selection)
+        except (MigrationError, FroxlorApiError, TransferError) as exc:
+            console.print(f"[red]Migration failed for {login}:[/red] {exc}")
+            console.print(f"Manifest: {runner.manifest_path}")
+            if not batch:
+                raise SystemExit(1) from exc
+            results.append((login, f"failed: {exc}", None, str(runner.manifest_path)))
+            continue
+        results.append((login, "ok", context, str(runner.manifest_path)))
+        if not batch:
+            _print_migration_result(context, runner)
+
+    if not batch:
+        return
+    summary = Table(title="Batch result")
+    summary.add_column("Customer")
+    summary.add_column("Status")
+    summary.add_column("Target id")
+    summary.add_column("Manifest")
+    for login, status, context, manifest in results:
+        target_id = str(getattr(context, "target_customer_id", "") or "") if context else ""
+        style = "green" if status == "ok" else "red"
+        summary.add_row(login, f"[{style}]{status}[/{style}]", target_id, manifest)
+    console.print(summary)
+    if any(status != "ok" for _login, status, _ctx, _m in results):
+        raise SystemExit(1)
+
+
+def _run_headless(args: argparse.Namespace, config) -> None:
+    dry_run = _resolve_dry_run(args, config)
+    source, target = build_clients(config)
+
+    console.print("[bold]Froxlor Migrator[/bold]")
+    console.print(f"Mode: {'[yellow]dry-run[/yellow]' if dry_run else '[green]apply[/green]'}")
+    if args.debug:
+        console.print("Debug: [green]enabled[/green]")
+
+    php_mapping_arg, ip_mapping_arg = _parse_mapping_args(args)
+
+    try:
+        customers = source.list_customers()
+        source_php_settings = source.list_php_settings()
+        target_php_settings = target.list_php_settings()
+    except FroxlorApiError as exc:
+        console.print(f"[red]API error:[/red] {exc}")
+        raise SystemExit(1) from exc
+
+    selected_customers = _resolve_source_customers(args, customer_view(customers))
+    batch = len(selected_customers) > 1
+
+    migrate_whole_customer = _resolve_mode(args)
+    target_customer = None
+    if not migrate_whole_customer:
+        target_customer = _resolve_target_customer(args, target)
+
+    includes = _include_flags(args)
+
+    planned = _plan_all_customers(
+        args,
+        config,
+        source,
+        target,
+        selected_customers,
+        migrate_whole_customer=migrate_whole_customer,
+        target_customer=target_customer,
+        php_mapping_arg=php_mapping_arg,
+        ip_mapping_arg=ip_mapping_arg,
+        source_php_settings=source_php_settings,
+        target_php_settings=target_php_settings,
+        includes=includes,
+        batch=batch,
+    )
+
+    if batch:
+        _print_batch_plan_and_replay(
+            args,
+            planned,
+            migrate_whole_customer=migrate_whole_customer,
+            target_customer=target_customer,
+            includes=includes,
+            dry_run=dry_run,
+        )
+    else:
+        _print_single_plan_and_replay(
+            args,
+            planned[0],
+            migrate_whole_customer=migrate_whole_customer,
+            target_customer=target_customer,
+            target_php_settings=target_php_settings,
+            includes=includes,
+            dry_run=dry_run,
+        )
+
+    _execute_planned(args, config, source, target, planned, batch=batch, dry_run=dry_run)
 
 
 def run_app() -> None:

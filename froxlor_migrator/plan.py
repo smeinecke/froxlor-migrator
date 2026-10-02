@@ -106,6 +106,23 @@ def resolve_named_mapping(
     return resolved
 
 
+def filter_mapping_to_rows(
+    raw_mapping: dict[str, str],
+    source_rows: list[dict],
+    value_getter: Callable[[dict], int],
+    alias_getter: Callable[[dict], list[str]],
+) -> tuple[dict[str, str], set[str]]:
+    """Split a raw token map into (tokens present in source_rows, absent tokens).
+
+    Batch mode applies an explicit --php-map/--ip-map tolerantly per customer —
+    a source token that matches nothing in this customer's rows is recorded as
+    unapplied instead of aborting the batch.
+    """
+    index = build_value_index(source_rows, value_getter, alias_getter)
+    applicable = {source: target for source, target in raw_mapping.items() if source in index}
+    return applicable, set(raw_mapping) - set(applicable)
+
+
 def php_setting_aliases(row: dict) -> list[str]:
     setting_id = as_int(pick(row, "id", default=0))
     description = str(pick(row, "description", default="")).strip()
@@ -178,21 +195,24 @@ def build_ip_mapping_tokens(resolved_map: dict[int, int], source_rows: list[dict
     return build_mapping_tokens(resolved_map, source_rows, target_rows, ip_token)
 
 
-def select_rows_by_tokens(
+def match_rows_by_tokens(
     rows: list[dict],
     selectors_raw: str | None,
     selector_values: Callable[[dict], list[str]],
-    selector_label: str,
-) -> list[dict]:
+) -> tuple[list[dict], set[str]]:
+    """Tolerant selector match: returns (selected rows, unresolved tokens).
+
+    Unlike ``select_rows_by_tokens`` this never raises — batch mode uses it to
+    apply the same selector across customers where a token may legitimately
+    match nothing in some of them.
+    """
     if selectors_raw is None:
-        return rows
+        return list(rows), set()
     tokens = {token.lower() for token in split_csv(selectors_raw)}
-    if not tokens:
-        return rows
-    if "all" in tokens:
-        return rows
+    if not tokens or "all" in tokens:
+        return list(rows), set()
     if "none" in tokens:
-        return []
+        return [], set()
 
     selected: list[dict] = []
     unresolved = set(tokens)
@@ -201,6 +221,16 @@ def select_rows_by_tokens(
         if values & tokens:
             selected.append(row)
             unresolved -= values & tokens
+    return selected, unresolved
+
+
+def select_rows_by_tokens(
+    rows: list[dict],
+    selectors_raw: str | None,
+    selector_values: Callable[[dict], list[str]],
+    selector_label: str,
+) -> list[dict]:
+    selected, unresolved = match_rows_by_tokens(rows, selectors_raw, selector_values)
     if unresolved:
         missing = ", ".join(sorted(unresolved))
         raise ValueError(f"Unknown {selector_label} selector(s): {missing}")
@@ -232,6 +262,33 @@ def mapping_parts(flag: str, tokens: dict[str, str]) -> list[str]:
         return []
     value = ",".join(f"{source}=>{target}" for source, target in sorted(tokens.items()))
     return [flag, value]
+
+
+def _append_include_flags(
+    parts: list[str],
+    *,
+    include_files: bool,
+    include_databases: bool,
+    include_mail: bool,
+    include_certificates: bool,
+    include_domain_zones: bool,
+    include_password_sync: bool,
+    include_forwarders: bool,
+    include_sender_aliases: bool,
+    skip_subdomains: bool,
+    skip_database_name_validation: bool,
+) -> None:
+    parts.extend(["--include-files", "yes" if include_files else "no"])
+    parts.extend(["--include-databases", "yes" if include_databases else "no"])
+    parts.extend(["--include-mail", "yes" if include_mail else "no"])
+
+    parts += flag_parts(skip_subdomains, "--skip-subdomains")
+    parts += flag_parts(skip_database_name_validation, "--skip-database-name-validation")
+    parts += flag_parts(not include_certificates, "--skip-certificates")
+    parts += flag_parts(not include_domain_zones, "--skip-dns-zones")
+    parts += flag_parts(not include_password_sync, "--skip-password-sync")
+    parts += flag_parts(not include_forwarders, "--skip-forwarders")
+    parts += flag_parts(not include_sender_aliases, "--skip-sender-aliases")
 
 
 def build_replay_command(
@@ -286,19 +343,108 @@ def build_replay_command(
     parts += mapping_parts("--php-map", php_mapping_tokens)
     parts += mapping_parts("--ip-map", ip_mapping_tokens)
 
-    parts.extend(["--include-files", "yes" if include_files else "no"])
-    parts.extend(["--include-databases", "yes" if include_databases else "no"])
-    parts.extend(["--include-mail", "yes" if include_mail else "no"])
-
-    parts += flag_parts(skip_subdomains, "--skip-subdomains")
-    parts += flag_parts(skip_database_name_validation, "--skip-database-name-validation")
-    parts += flag_parts(not include_certificates, "--skip-certificates")
-    parts += flag_parts(not include_domain_zones, "--skip-dns-zones")
-    parts += flag_parts(not include_password_sync, "--skip-password-sync")
-    parts += flag_parts(not include_forwarders, "--skip-forwarders")
-    parts += flag_parts(not include_sender_aliases, "--skip-sender-aliases")
+    _append_include_flags(
+        parts,
+        include_files=include_files,
+        include_databases=include_databases,
+        include_mail=include_mail,
+        include_certificates=include_certificates,
+        include_domain_zones=include_domain_zones,
+        include_password_sync=include_password_sync,
+        include_forwarders=include_forwarders,
+        include_sender_aliases=include_sender_aliases,
+        skip_subdomains=skip_subdomains,
+        skip_database_name_validation=skip_database_name_validation,
+    )
 
     return " ".join(shlex.quote(part) for part in parts)
+
+
+def build_batch_replay_command(
+    *,
+    config_path: str,
+    apply: bool,
+    debug: bool,
+    migrate_whole_customer: bool,
+    customer_tokens: list[str],
+    all_customers: bool,
+    target_customer: dict[str, Any] | None,
+    domains_arg: str | None,
+    subdomains_arg: str | None,
+    databases_arg: str | None,
+    mailboxes_arg: str | None,
+    ftp_accounts_arg: str | None,
+    php_map_arg: str | None,
+    ip_map_arg: str | None,
+    include_files: bool,
+    include_databases: bool,
+    include_mail: bool,
+    include_certificates: bool,
+    include_domain_zones: bool,
+    include_password_sync: bool,
+    include_forwarders: bool,
+    include_sender_aliases: bool,
+    skip_subdomains: bool,
+    skip_database_name_validation: bool,
+) -> str:
+    """Replay for a batch run: echoes the selector args verbatim instead of the
+    resolved per-customer row lists (which differ between customers)."""
+    parts: list[str] = ["froxlor-migrator", "--config", config_path, "--non-interactive", "--yes"]
+    parts += flag_parts(apply, "--apply")
+    parts += flag_parts(debug, "--debug")
+    parts.append("--whole-customer" if migrate_whole_customer else "--domain-only")
+
+    if all_customers:
+        parts.append("--all-customers")
+    else:
+        parts.extend(["--source-customer", ",".join(customer_tokens)])
+    if not migrate_whole_customer:
+        target_token = "new" if target_customer is None else customer_selector_token(target_customer)
+        parts.extend(["--target-customer", target_token])
+
+    for flag, raw in (
+        ("--domains", domains_arg),
+        ("--subdomains", subdomains_arg),
+        ("--databases", databases_arg),
+        ("--mailboxes", mailboxes_arg),
+        ("--ftp-accounts", ftp_accounts_arg),
+    ):
+        if raw is not None:
+            parts.extend([flag, raw])
+
+    if php_map_arg:
+        parts.extend(["--php-map", php_map_arg])
+    if ip_map_arg:
+        parts.extend(["--ip-map", ip_map_arg])
+
+    _append_include_flags(
+        parts,
+        include_files=include_files,
+        include_databases=include_databases,
+        include_mail=include_mail,
+        include_certificates=include_certificates,
+        include_domain_zones=include_domain_zones,
+        include_password_sync=include_password_sync,
+        include_forwarders=include_forwarders,
+        include_sender_aliases=include_sender_aliases,
+        skip_subdomains=skip_subdomains,
+        skip_database_name_validation=skip_database_name_validation,
+    )
+
+    return " ".join(shlex.quote(part) for part in parts)
+
+
+def batch_summary_row(customer: dict, sel: dict[str, Any]) -> tuple[str, str, str, str, str, str, str]:
+    """Compact per-customer row for the batch plan table."""
+    return (
+        str(pick(customer, "loginname", "login", default="?")),
+        str(len(sel["domains"])),
+        str(len(sel["subdomains"])),
+        str(len(sel["databases"])),
+        str(len(sel["mailboxes"])),
+        str(len(sel["ftps"])),
+        str(len(sel["domain_zones"])),
+    )
 
 
 def customer_view(customers: list[dict]) -> list[dict]:
@@ -466,6 +612,75 @@ def narrow_subdomains(subdomains: list[dict], selected_domain_names: set[str]) -
         )
         is not None
     ]
+
+
+def select_customer_resources(
+    resources: dict[str, list[dict]],
+    *,
+    whole_customer: bool,
+    source_web_root: str,
+    selectors: dict[str, str | None] | None = None,
+    strict: bool = False,
+    matched: dict[str, set[str]] | None = None,
+) -> dict[str, Any]:
+    """Turn a customer's raw resource rows into the selected ``sel`` dict.
+
+    Shared by the headless CLI and the wizard. ``selectors`` carries raw CSV
+    strings keyed ``domains``/``subdomains``/``databases``/``mailboxes``/
+    ``ftp_accounts``; ``None`` selects everything.
+
+    ``strict=True`` raises ``ValueError`` on unresolved tokens (single-customer
+    behavior). ``strict=False`` (batch) tolerates per-customer misses and
+    records resolved tokens per label in ``matched`` so the caller can flag
+    tokens that matched no customer at all.
+    """
+    selectors = selectors or {}
+
+    def pick_rows(rows: list[dict], raw: str | None, values_fn: Callable[[dict], list[str]], label: str) -> list[dict]:
+        if strict:
+            return select_rows_by_tokens(rows, raw, values_fn, label)
+        selected, left = match_rows_by_tokens(rows, raw, values_fn)
+        if matched is not None:
+            provided = {token.lower() for token in split_csv(raw)} - {"all", "none"}
+            matched.setdefault(label, set()).update(provided - left)
+        return selected
+
+    if whole_customer:
+        candidates = [d for d in resources["domains"] if domain_in_source_root(d, source_web_root)]
+    else:
+        candidates = list(resources["domains"])
+    selected_domains = pick_rows(candidates, selectors.get("domains"), lambda row: [domain_name(row)], "domain")
+    domain_names = {domain_name(d) for d in selected_domains}
+    narrowed = narrow_subdomains(resources["subdomains"], domain_names)
+
+    dbname_values = lambda row: [str(pick(row, "databasename", "dbname", default=""))]  # noqa: E731
+    mailbox_values = lambda row: [mailbox_address(row)]  # noqa: E731
+    ftp_values = lambda row: [ftp_username(row)]  # noqa: E731
+    sub_values = lambda row: [domain_name(row)]  # noqa: E731
+
+    selected_databases = pick_rows(resources["dbs"], selectors.get("databases"), dbname_values, "database")
+    if whole_customer:
+        selected_mailboxes = pick_rows(resources["emails"], selectors.get("mailboxes"), mailbox_values, "mailbox")
+    else:
+        mailbox_domain_names = domain_names | {domain_name(row) for row in narrowed if domain_name(row)}
+        mailbox_candidates = mail_view(resources["emails"], mailbox_domain_names)
+        selected_mailboxes = [
+            item.get("_raw", item) for item in pick_rows(mailbox_candidates, selectors.get("mailboxes"), lambda row: [str(row.get("email", ""))], "mailbox")
+        ]
+    selected_ftps = pick_rows(resources["ftps"], selectors.get("ftp_accounts"), ftp_values, "FTP account")
+    selected_subdomains = pick_rows(narrowed, selectors.get("subdomains"), sub_values, "subdomain")
+
+    scoped = derive_scoped_resources(resources, selected_mailboxes, selected_ftps)
+    return {
+        "domains": selected_domains,
+        "subdomains": selected_subdomains,
+        "databases": selected_databases,
+        "mailboxes": selected_mailboxes,
+        "ftps": selected_ftps,
+        "domain_names": domain_names,
+        "skipped_out_root": len(resources["domains"]) - len(candidates) if whole_customer else 0,
+        **scoped,
+    }
 
 
 def derive_scoped_resources(

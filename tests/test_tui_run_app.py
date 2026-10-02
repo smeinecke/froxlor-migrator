@@ -37,7 +37,10 @@ class DummyClient:
         pass
 
     def list_customers(self):
-        return [{"customerid": 1, "loginname": "alice", "email": "alice@example.com", "name": "Alice"}]
+        return [
+            {"customerid": 1, "loginname": "alice", "email": "alice@example.com", "name": "Alice"},
+            {"customerid": 2, "loginname": "bob", "email": "bob@example.com", "name": "Bob"},
+        ]
 
     def list_domains(self, **kwargs):
         return [{"domain": "example.com", "documentroot": "/var/www/example.com", "phpsettingid": 1}]
@@ -188,6 +191,184 @@ class RunAppTests(unittest.TestCase):
                 self.assertEqual(1, ctx.exception.code)
             finally:
                 sys.argv = sys_argv
+
+    def test_run_app_batch_migrates_each_customer(self) -> None:
+        executed: list[str] = []
+
+        class RecordingMigrator(DummyMigrator):
+            def execute(self, selection):
+                executed.append(selection.customer["loginname"])
+                return SimpleNamespace(target_customer_id=100 + len(executed), source_to_target_db={})
+
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", RecordingMigrator),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
+            sys_argv = sys.argv
+            try:
+                sys.argv = ["run", "--config", "config.toml", "--non-interactive", "--yes", "--all-customers"]
+                tui_module.run_app()
+            finally:
+                sys.argv = sys_argv
+
+        self.assertEqual(executed, ["alice", "bob"])
+
+    def test_run_app_batch_continues_after_failure(self) -> None:
+        executed: list[str] = []
+
+        class FlakyMigrator(DummyMigrator):
+            def execute(self, selection):
+                executed.append(selection.customer["loginname"])
+                if selection.customer["loginname"] == "alice":
+                    raise tui_module.MigrationError("boom")
+                return SimpleNamespace(target_customer_id=42, source_to_target_db={})
+
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", FlakyMigrator),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
+            sys_argv = sys.argv
+            try:
+                sys.argv = [
+                    "run",
+                    "--config",
+                    "config.toml",
+                    "--non-interactive",
+                    "--yes",
+                    "--source-customer",
+                    "alice,bob",
+                ]
+                with self.assertRaises(SystemExit) as ctx:
+                    tui_module.run_app()
+                self.assertEqual(1, ctx.exception.code)
+            finally:
+                sys.argv = sys_argv
+
+        # alice failed but bob still migrated; the batch exits non-zero.
+        self.assertEqual(executed, ["alice", "bob"])
+
+    def test_run_app_batch_rejects_token_matching_no_customer(self) -> None:
+        executed: list[str] = []
+
+        class RecordingMigrator(DummyMigrator):
+            def execute(self, selection):
+                executed.append(selection.customer["loginname"])
+                return SimpleNamespace(target_customer_id=1, source_to_target_db={})
+
+        class DummyConfig:
+            class Api:
+                api_url = ""
+                api_key = ""
+                api_secret = ""
+                timeout_seconds = 30
+
+            source = Api()
+            target = Api()
+
+            class Paths:
+                source_web_root = "/var/www"
+                source_transfer_root = "/var/www"
+                target_web_root = "/var/www"
+
+            paths = Paths()
+
+            class Behavior:
+                dry_run_default = True
+
+            behavior = Behavior()
+
+            class Commands:
+                ssh = "ssh"
+
+            commands = Commands()
+
+        with (
+            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
+            patch.object(tui_module, "TransferRunner", DummyRunner),
+            patch.object(tui_module, "Migrator", RecordingMigrator),
+            patch("froxlor_migrator.plan.Selection", lambda **kwargs: SimpleNamespace(**kwargs)),
+        ):
+            sys_argv = sys.argv
+            try:
+                sys.argv = [
+                    "run",
+                    "--config",
+                    "config.toml",
+                    "--non-interactive",
+                    "--yes",
+                    "--all-customers",
+                    "--domains",
+                    "no-such-domain.invalid",
+                ]
+                with self.assertRaises(SystemExit) as ctx:
+                    tui_module.run_app()
+                self.assertEqual(1, ctx.exception.code)
+            finally:
+                sys.argv = sys_argv
+
+        # The typo'd --domains token matched no customer — nothing executed.
+        self.assertEqual(executed, [])
 
     def test_run_app_interactive_requires_tty(self) -> None:
         class DummyConfig:
