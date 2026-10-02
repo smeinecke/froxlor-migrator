@@ -7,7 +7,20 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from froxlor_migrator.api import FroxlorApiError
-from froxlor_migrator.migration.core import MigrationError, MigratorCore
+from froxlor_migrator.migration.core import MigrationError, MigratorCore, _parse_mysql_batch_output
+
+
+class MysqlBatchOutputTests(unittest.TestCase):
+    def test_parse_mysql_batch_output_unescapes_specials(self) -> None:
+        output = "1\tplain\tNULL\n2\twith\\ttab\twith\\nnewline\n3\tbackslash\\\\here\tctrl\\Zz\n"
+        rows = _parse_mysql_batch_output(output)
+        self.assertEqual(rows[0], ["1", "plain", ""])
+        self.assertEqual(rows[1], ["2", "with\ttab", "with\nnewline"])
+        self.assertEqual(rows[2], ["3", "backslash\\here", "ctrl\x1az"])
+
+    def test_parse_mysql_batch_output_keeps_empty_lines_split(self) -> None:
+        self.assertEqual(_parse_mysql_batch_output("a\tb\n"), [["a", "b"]])
+        self.assertEqual(_parse_mysql_batch_output(""), [])
 
 
 class DummyRunner:

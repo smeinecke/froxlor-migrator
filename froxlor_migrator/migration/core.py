@@ -30,6 +30,36 @@ from .types import MigrationError, ResourceRow, Selection
 
 T = TypeVar("T")
 
+# mysql --batch (without --raw) escapes special characters in cell values, so
+# tabs/newlines inside data cannot corrupt the TSV structure.
+_MYSQL_BATCH_ESCAPES = {
+    "0": "\x00",
+    "n": "\n",
+    "t": "\t",
+    "r": "\r",
+    "b": "\b",
+    "Z": "\x1a",
+    "\\": "\\",
+}
+
+
+def _unescape_mysql_batch_cell(value: str) -> str:
+    out: list[str] = []
+    idx = 0
+    while idx < len(value):
+        char = value[idx]
+        if char == "\\" and idx + 1 < len(value):
+            out.append(_MYSQL_BATCH_ESCAPES.get(value[idx + 1], value[idx + 1]))
+            idx += 2
+            continue
+        out.append(char)
+        idx += 1
+    return "".join(out)
+
+
+def _parse_mysql_batch_output(output: str) -> list[list[str]]:
+    return [["" if cell == "NULL" else _unescape_mysql_batch_cell(cell) for cell in line.split("\t")] for line in output.splitlines()]
+
 
 class MigratorCore:
     def _debug(self, message: str, **payload: Any) -> None:
@@ -516,7 +546,7 @@ class MigratorCore:
             cmd = (
                 f"{sudo}{shlex.quote(self.config.commands.mysql)} "
                 f"--defaults-extra-file={shlex.quote(remote_defaults)} "
-                "--batch --raw --skip-column-names "
+                "--batch --skip-column-names "
                 f"{shlex.quote(database)} < {shlex.quote(remote_script)}"
             )
             self._debug("target_mysql_remote_cli_execute", database=database, command=cmd)
@@ -593,7 +623,7 @@ class MigratorCore:
 
         def parse_cli_output() -> list[list[str]]:
             output = self._run_target_mysql_via_remote_cli(sql, database)
-            return [["" if cell == "NULL" else cell for cell in line.split("\t")] for line in output.splitlines()]
+            return _parse_mysql_batch_output(output)
 
         return self._with_target_mysql(
             "query",
