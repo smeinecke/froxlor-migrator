@@ -148,6 +148,7 @@ install_if_needed() {
 		--distribution "${FROXLOR_DISTRIBUTION:-}" \
 		--webserver "${FROXLOR_WEBSERVER:-apache24}" \
 		--webserver-backend "${FROXLOR_WEBSERVER_BACKEND:-php-fpm}" \
+		--use-ssl \
 		--manual-config
 
 	docker compose cp "$input_json" "$service:/tmp/froxlor-install.json"

@@ -10,7 +10,7 @@ This folder provides a reproducible local test setup for the migrator:
   - WordPress files in one domain
   - static HTML in one domain
   - one mail-only domain with 2 mailboxes and one catchall
-  - one empty domain
+  - one empty domain with `letsencrypt=1` (LE DNS check disabled; exercises the migrator's deferred LE-enable path without real ACME)
   - one SSL domain with custom certificate, DKIM key material, rewrite/vhost settings
 - one additional redirect domain with custom domain config
 - one forwarding-domain fixture (`forward-demo.test` -> `secure-demo.test`) with explicit redirect code

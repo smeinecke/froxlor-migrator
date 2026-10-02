@@ -1140,6 +1140,15 @@ def main() -> None:
         documentroot="/data/customers/custbeta/empty-demo.test",
         phpsettingid=php_b,
         is_email_domain=False,
+        extra_settings={
+            "sslenabled": True,
+            # le_domain_dnscheck is disabled on both panels, so the flag can be
+            # set without real DNS/ACME validation. The migrator re-applies it
+            # on the target after DNS sync — that's the path under test.
+            "letsencrypt": True,
+            # LE refuses wildcard server aliases — use the www-alias mode.
+            "selectserveralias": 1,
+        },
     )
     ensure_domain(
         api,
@@ -1437,6 +1446,10 @@ def main() -> None:
         "php_settings_used": [php_a, php_b],
         "php_settings_profiles": ["php8.3", "php8.4"],
         "domain_settings": {
+            "empty-demo.test": {
+                "ssl_enabled": 1,
+                "letsencrypt": 1,
+            },
             "secure-demo.test": {
                 "ssl_enabled": 1,
                 "letsencrypt": 0,

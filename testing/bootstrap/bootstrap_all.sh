@@ -66,7 +66,8 @@ for svc_db in source-db target-db; do
 		source-db) db_user="${SOURCE_DB_ROOT_USER:-root}"; db_pass="${SOURCE_DB_ROOT_PASSWORD:-source-root}"; db_name="${SOURCE_DB_NAME:-froxlor}" ;;
 		target-db) db_user="${TARGET_DB_ROOT_USER:-root}"; db_pass="${TARGET_DB_ROOT_PASSWORD:-target-root}"; db_name="${TARGET_DB_NAME:-froxlor}" ;;
 	esac
-	docker compose exec -T "$svc_db" sh -lc "MYSQL_PWD='${db_pass}' mariadb -u'${db_user}' '${db_name}' -e \"UPDATE panel_settings SET value='1' WHERE (settinggroup='mail' AND varname='enable_allow_sender') OR (settinggroup='system' AND varname IN ('dnsenabled','exportenabled','bind_enable'));\""
+	docker compose exec -T "$svc_db" sh -lc "MYSQL_PWD='${db_pass}' mariadb -u'${db_user}' '${db_name}' -e \"UPDATE panel_settings SET value='1' WHERE (settinggroup='mail' AND varname='enable_allow_sender') OR (settinggroup='system' AND varname IN ('dnsenabled','exportenabled','bind_enable','leenabled'))\""
+	docker compose exec -T "$svc_db" sh -lc "MYSQL_PWD='${db_pass}' mariadb -u'${db_user}' '${db_name}' -e \"UPDATE panel_settings SET value='0' WHERE settinggroup='system' AND varname='le_domain_dnscheck'\""
 done
 
 "$SCRIPT_DIR/create_api_keys.sh"
