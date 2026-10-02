@@ -315,6 +315,17 @@ def ensure_php_settings(api: FroxlorApi) -> list[int]:
     return ids
 
 
+def ensure_ip_port(api: FroxlorApi, ip: str, port: int) -> int:
+    for row in api.listing("IpsAndPorts.listing"):
+        if str(_pick(row, "ip", default="")).strip() == ip and _to_int(_pick(row, "port", default=0)) == port:
+            return _to_int(_pick(row, "id", default=0))
+    api.call("IpsAndPorts.add", {"ip": ip, "port": port})
+    for row in api.listing("IpsAndPorts.listing"):
+        if str(_pick(row, "ip", default="")).strip() == ip and _to_int(_pick(row, "port", default=0)) == port:
+            return _to_int(_pick(row, "id", default=0))
+    raise ApiError(f"Could not ensure IP:port {ip}:{port}")
+
+
 def ensure_domain(
     api: FroxlorApi,
     customer_id: int,
@@ -1140,13 +1151,19 @@ def main() -> None:
         documentroot="/data/customers/custalpha/wp-demo.test",
         phpsettingid=php_a,
     )
+    secondary_ip = os.environ.get("SOURCE_SECONDARY_IP", "10.66.77.1")
+    secondary_ip_id = ensure_ip_port(api, secondary_ip, 80)
     ensure_domain(
         api,
         customer_id=cust_a_id,
         domain="static-demo.test",
         documentroot="/data/customers/custalpha/static-demo.test",
         phpsettingid=php_b,
+        # Bound only to the secondary IP so --ip-map exercises the domain
+        # ipandport remap and the zone A-record content rewrite.
+        extra_settings={"ipandport": [secondary_ip_id], "isbinddomain": True},
     )
+    ensure_zone_record(api, "static-demo.test", "direct", "A", secondary_ip, ttl=300)
     ensure_domain(
         api,
         customer_id=cust_b_id,
@@ -1588,6 +1605,12 @@ def main() -> None:
                 "record": "docs",
                 "type": "CNAME",
                 "content": "secure-demo.test.",
+            },
+            {
+                "domain": "static-demo.test",
+                "record": "direct",
+                "type": "A",
+                "content": os.environ.get("SOURCE_SECONDARY_IP", "10.66.77.1"),
             },
         ],
         "domain_redirects": [
