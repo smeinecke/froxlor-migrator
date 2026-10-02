@@ -123,8 +123,14 @@ class MigratorDomainOps:
 
             existing_target_cert = target_by_domain.get(domain_name)
             if existing_target_cert:
-                cert_id = as_int(pick(existing_target_cert, "id", default=0))
-                written = self.target.call("Certificates.update", {**cert_payload, "id": cert_id})
+                # Certificates.update resolves the target row via
+                # SubDomains.get(id, domainname) — `id` is the *domain* id
+                # (cert field `domainid`), not the ssl-settings row id.
+                cert_domain_id = as_int(pick(existing_target_cert, "domainid", "domain_id", default=0))
+                update_params = dict(cert_payload)
+                if cert_domain_id > 0:
+                    update_params["id"] = cert_domain_id
+                written = self.target.call("Certificates.update", update_params)
             else:
                 written = self.target.call("Certificates.add", cert_payload)
 
@@ -677,9 +683,31 @@ class MigratorDomainOps:
     def _ensure_domain_zones(self, domain_zones: list[dict[str, Any]], ip_value_mapping: dict[str, str]) -> None:
         if not domain_zones:
             return
+        # DomainZones.listing returns raw domain_dns_entries rows without a
+        # `domainname` field — resolve names via domain_id when absent.
+        domain_id_to_name: dict[int, str] | None = None
+
+        def row_domain(row: dict[str, Any]) -> str:
+            nonlocal domain_id_to_name
+            name = str(pick(row, "domainname", default="")).strip().lower()
+            if name:
+                return name
+            domain_id = as_int(pick(row, "domain_id", "domainid", default=0))
+            if domain_id <= 0:
+                return ""
+            if domain_id_to_name is None:
+                domain_id_to_name = {}
+                for command in ("Domains.listing", "SubDomains.listing"):
+                    for item in self.source.listing(command):
+                        item_id = as_int(pick(item, "id", default=0))
+                        item_name = str(pick(item, "domain", default="")).strip().lower()
+                        if item_id > 0 and item_name:
+                            domain_id_to_name[item_id] = item_name
+            return domain_id_to_name.get(domain_id, "")
+
         by_domain: dict[str, list[dict[str, Any]]] = {}
         for row in domain_zones:
-            domainname = str(pick(row, "domainname", default="")).strip().lower()
+            domainname = row_domain(row)
             if not domainname:
                 continue
             by_domain.setdefault(domainname, []).append(row)
@@ -730,10 +758,13 @@ class MigratorDomainOps:
                 candidates = near_matches.get((record_name, record_type, prio, ttl), [])
                 if len(candidates) == 1 and str(pick(candidates[0], "content", default="")).strip() != content:
                     record_id = as_int(pick(candidates[0], "id", default=0))
+                    # DomainZones.update is a stub that always throws 303 —
+                    # Froxlor requires delete + re-add for changed content.
+                    self.target.call("DomainZones.delete", {"domainname": domainname, "entry_id": record_id})
                     self.target.call(
-                        "DomainZones.update",
+                        "DomainZones.add",
                         {
-                            "id": record_id,
+                            "domainname": domainname,
                             "record": record_name,
                             "type": record_type,
                             "prio": prio,

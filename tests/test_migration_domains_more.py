@@ -371,7 +371,9 @@ class DomainZoneAndSubdomainTests(unittest.TestCase):
     def test_ensure_domain_zones_updates_drifted_content(self) -> None:
         # A target record identical in (record, type, prio, ttl) but with
         # different content (e.g. case drift in a TXT record) must be
-        # updated, not silently skipped by the case-insensitive dedup.
+        # replaced, not silently skipped by the case-insensitive dedup.
+        # Froxlor has no DomainZones.update — it throws 303 — so the
+        # migrator deletes and re-adds the entry.
         calls: list[tuple[str, dict[str, object]]] = []
         target = SimpleNamespace(
             list_domain_zones=lambda domainname=None: [{"record": "www", "type": "TXT", "prio": 0, "content": "ABCdef", "ttl": 300, "id": 7}],
@@ -384,12 +386,12 @@ class DomainZoneAndSubdomainTests(unittest.TestCase):
             {},
         )
 
-        updates = [c for c in calls if c[0] == "DomainZones.update"]
+        deletes = [c for c in calls if c[0] == "DomainZones.delete"]
         adds = [c for c in calls if c[0] == "DomainZones.add"]
-        self.assertEqual(1, len(updates))
-        self.assertEqual(7, updates[0][1]["id"])
-        self.assertEqual("abcdef", updates[0][1]["content"])
-        self.assertEqual([], adds)
+        self.assertEqual(1, len(deletes))
+        self.assertEqual(7, deletes[0][1]["entry_id"])
+        self.assertEqual(1, len(adds))
+        self.assertEqual("abcdef", adds[0][1]["content"])
 
     def test_ensure_domain_zones_adds_when_content_differs_ambiguously(self) -> None:
         # Multiple records share (record, type, prio, ttl): cannot pick one
@@ -452,7 +454,33 @@ if __name__ == "__main__":
 
 
 class CertificateMigrationTests(unittest.TestCase):
-    def test_existing_certificate_update_passes_cert_id(self) -> None:
+    def test_existing_certificate_update_passes_domain_id(self) -> None:
+        ops = DummyDomainOps()
+        calls: list[tuple[str, dict]] = []
+        # `id` is the ssl-settings row id; Certificates.update expects the
+        # *domain* id, which the listing exposes as `domainid`.
+        certs = [{"domainname": "ex.com", "id": 55, "domainid": 77, "ssl_cert_file": "CERT", "ssl_key_file": "KEY"}]
+
+        def listing(command: str):
+            if command == "Certificates.listing":
+                return certs
+            return []
+
+        ops.source = SimpleNamespace(listing=listing)
+        ops.target = SimpleNamespace(
+            listing=listing,
+            call=lambda method, payload=None: calls.append((method, payload or {})),
+        )
+        ops._migrate_domain_certificates([{"domain": "ex.com", "letsencrypt": 0}])
+        self.assertIn(
+            (
+                "Certificates.update",
+                {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY", "ssl_ca_file": "", "ssl_cert_chainfile": "", "id": 77},
+            ),
+            calls,
+        )
+
+    def test_existing_certificate_update_without_domain_id_omits_id(self) -> None:
         ops = DummyDomainOps()
         calls: list[tuple[str, dict]] = []
         certs = [{"domainname": "ex.com", "id": 55, "ssl_cert_file": "CERT", "ssl_key_file": "KEY"}]
@@ -471,7 +499,7 @@ class CertificateMigrationTests(unittest.TestCase):
         self.assertIn(
             (
                 "Certificates.update",
-                {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY", "ssl_ca_file": "", "ssl_cert_chainfile": "", "id": 55},
+                {"domainname": "ex.com", "ssl_cert_file": "CERT", "ssl_key_file": "KEY", "ssl_ca_file": "", "ssl_cert_chainfile": ""},
             ),
             calls,
         )

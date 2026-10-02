@@ -118,7 +118,10 @@ class FroxlorClient:
             logger.debug("Froxlor API non-JSON response: command=%s body=%s", command, snippet)
             raise FroxlorApiError(f"API {command} returned non-JSON response (HTTP {response.status_code}): {snippet!r}") from exc
 
-        if data.get("status") and as_int(data.get("status"), default=200) >= 400:
+        # Froxlor signals errors via the JSON `status` field with HTTP-style
+        # codes; some endpoints throw with 3xx codes (e.g. DomainZones.update
+        # always throws 303), so treat everything outside 2xx as an error.
+        if data.get("status") and not 200 <= as_int(data.get("status"), default=200) < 300:
             logger.debug(
                 "Froxlor API semantic error: command=%s status=%s message=%s",
                 command,
