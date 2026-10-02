@@ -138,6 +138,24 @@ manifest_dir = "/tmp/manifests"
             cfg = load_config(path)
         self.assertEqual(cfg.paths.source_web_root, cfg.paths.source_transfer_root)
 
+    def test_unknown_keys_raise_value_error(self) -> None:
+        content = _base_config_text().replace(
+            'target_web_root = "/var/customers/webs"',
+            'target_web_root = "/var/customers/webs"\ntarget_owner_user = "www-data"',
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config.toml"
+            path.write_text(content, encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "target_owner_user"):
+                load_config(path)
+
+    def test_unknown_top_level_section_is_ignored(self) -> None:
+        content = _base_config_text() + '\n\n[misc]\nwhatever = "x"\n'
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config.toml"
+            path.write_text(content, encoding="utf-8")
+            load_config(path)  # must not raise
+
     def test_empty_required_key_raises_value_error(self) -> None:
         content = """
 [source]

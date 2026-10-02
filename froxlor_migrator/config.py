@@ -29,6 +29,12 @@ def _exists_policy(mapping: dict, key: str, default: str) -> str:
     return value
 
 
+def _check_unknown(section: str, mapping: dict, allowed: set[str]) -> None:
+    unknown = sorted(set(mapping) - allowed)
+    if unknown:
+        raise ValueError(f"Unknown config keys in [{section}]: {', '.join(unknown)}")
+
+
 def _must(mapping: dict, key: str) -> str:
     value = mapping.get(key)
     if value is None:
@@ -121,6 +127,30 @@ def load_config(path: str | Path) -> AppConfig:
     commands = raw.get("commands", {})
     behavior = raw.get("behavior", {})
     output = raw.get("output", {})
+
+    _check_unknown("source", source, {"api_url", "api_key", "api_secret", "timeout_seconds"})
+    _check_unknown("target", target, {"api_url", "api_key", "api_secret", "timeout_seconds"})
+    _check_unknown("ssh", ssh, {"host", "user", "port", "strict_host_key_checking", "command_timeout_seconds"})
+    _check_unknown("paths", paths, {"source_web_root", "source_transfer_root", "target_web_root"})
+    _check_unknown("mysql", mysql, {"source_panel_database", "target_panel_database"})
+    _check_unknown(
+        "commands",
+        commands,
+        {"ssh", "sudo", "tar", "mysqldump", "mysql", "doveadm", "pzstd", "pigz"},
+    )
+    _check_unknown(
+        "behavior",
+        behavior,
+        {
+            "dry_run_default",
+            "domain_exists",
+            "database_exists",
+            "mailbox_exists",
+            "local_command_timeout_seconds",
+            "transfer_timeout_seconds",
+        },
+    )
+    _check_unknown("output", output, {"manifest_dir"})
 
     source_cfg = ApiConfig(
         api_url=_must(source, "api_url"),
