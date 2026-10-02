@@ -59,6 +59,24 @@ verify_mail_probe_target() {
 	fi
 }
 
+assert_customers_absent() {
+	# After a --dry-run apply the target must still have none of the seed
+	# customers — guards against a write path that bypasses dry_run.
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace uv run --no-project --with requests python3 /workspace/testing/bootstrap/assert_target_clean.py \
+		--api-url '${TARGET_API_URL}' --api-key '${TARGET_API_KEY}' --api-secret '${TARGET_API_SECRET}' \
+		--absent custalpha --absent custbeta --absent custgamma"
+}
+
+precreate_target_customer() {
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace \
+		TARGET_API_URL='${TARGET_API_URL}' TARGET_API_KEY='${TARGET_API_KEY}' TARGET_API_SECRET='${TARGET_API_SECRET}' \
+		TARGET_DB_ROOT_USER='${TARGET_DB_ROOT_USER:-root}' TARGET_DB_ROOT_PASSWORD='${TARGET_DB_ROOT_PASSWORD:-target-root}' \
+		TARGET_API_MYSQL_HOST='${TARGET_API_MYSQL_HOST:-target-db}' TARGET_API_MYSQL_PORT='${TARGET_API_MYSQL_PORT:-3306}' \
+		uv run --no-project --with requests --with pymysql python3 /workspace/testing/bootstrap/precreate_target_customer.py custbeta"
+}
+
 drift_target_zone_record() {
 	# Drift the seeded TXT record on the target so the second migration run has
 	# to repair it via the DomainZones.update near-match path (same
@@ -71,12 +89,32 @@ drift_target_zone_record() {
 }
 
 run_apply() {
+	# Extra args are passed through to run_migration_apply.py (e.g. --dry-run).
 	docker compose exec -T source-froxlor sh -lc \
 		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko /workspace/testing/bootstrap/run_migration_apply.py \
 		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
 		--include-mail \
 		--customer custalpha \
+		--customer custbeta \
+		--customer custgamma $*"
+}
+
+run_verify() {
+	docker compose exec -T source-froxlor sh -lc \
+		"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko python3 -m froxlor_migrator.verify_migration \
+		--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
+		--customer custalpha \
+		--customer custbeta \
 		--customer custgamma"
+}
+
+tamper_target_zone_record() {
+	# Delete the migrated TXT record on the target — the negative verify
+	# below must detect this and exit non-zero.
+	docker compose exec -T target-db sh -lc \
+		"MYSQL_PWD='${TARGET_DB_ROOT_PASSWORD:-target-root}' mariadb -u'${TARGET_DB_ROOT_USER:-root}' '${TARGET_DB_NAME:-froxlor}' -e \
+		\"DELETE e FROM domain_dns_entries e JOIN panel_domains d ON d.id=e.domain_id \
+		 WHERE d.domain='secure-demo.test' AND e.record='migrator-test' AND e.type='TXT';\""
 }
 
 if [[ "${BOOTSTRAP_IN_DOCKER:-0}" == "1" ]]; then
@@ -146,20 +184,37 @@ wait_api "${TARGET_API_URL}"
 
 seed_mail_probe
 
+# 1) Dry-run must not write anything to the target.
+run_apply --dry-run
+assert_customers_absent
+
+# 2) Pre-create custbeta on the target so the real apply exercises the
+#    existing-customer update path instead of the create path.
+precreate_target_customer
+
 run_apply
 
 # Second run exercises the update/dedup paths for every resource type
 # (domain_exists=update, mailbox_exists=update); the drifted zone record
-# additionally forces DomainZones.update instead of a skip.
+# additionally forces the DomainZones delete+re-add repair path.
 drift_target_zone_record
 run_apply
 
-docker compose exec -T source-froxlor sh -lc \
-	"PYTHONPATH=/workspace uv run --no-project --with requests --with pymysql --with paramiko python3 -m froxlor_migrator.verify_migration \
-	--config /workspace/testing/.tmp/bootstrap-migration-config.toml \
-	--customer custalpha \
-	--customer custgamma"
+run_verify
 
 verify_mail_probe_target
+
+# Negative check: delete a migrated zone record on the target and require
+# verify_migration to fail — then restore via a final apply+verify so the
+# testbed ends consistent.
+tamper_target_zone_record
+if run_verify; then
+	echo "verify_migration did not detect the deleted zone record" >&2
+	exit 1
+else
+	echo "Negative verify passed: drift detected as expected"
+fi
+run_apply
+run_verify
 
 echo "Migration + parity verification succeeded"

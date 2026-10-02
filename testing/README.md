@@ -112,7 +112,16 @@ cd testing
 docker compose run --rm --profile bootstrap bootstrap migrate_and_verify
 ```
 
-This performs a real apply migration (files + databases + mailbox content via doveadm) for seeded test customers, then repeats the apply after deliberately drifting a target DNS record (exercises the update/dedup paths and `DomainZones.update`), and finally verifies source/target parity. It also injects a probe email into source mailbox `alerts@secure-demo.test` and asserts that the exact probe reaches target after migration. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
+This performs the full migration flow for seeded test customers:
+
+1. a `--dry-run` apply, then asserts none of the seed customers exist on the target (guards writes bypassing dry-run)
+2. `custbeta` is pre-created on the target so the apply exercises the existing-customer update path
+3. a real apply (files + databases + mailbox content via doveadm)
+4. a second apply after deliberately drifting a target DNS record — exercises all update/dedup paths plus the zone delete-and-re-add repair (`DomainZones.update` is a stub in Froxlor)
+5. `verify_migration` for all three customers, plus the mailbox probe assertion
+6. a negative check: a migrated zone record is deleted on the target and `verify_migration` must fail — then a final apply + verify restores parity
+
+It also injects a probe email into source mailbox `alerts@secure-demo.test` before the first apply and asserts that the exact probe reaches the target through the migrator's own `doveadm backup | dsync-server` transfer. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
 
 ## 5) Use with migrator
 

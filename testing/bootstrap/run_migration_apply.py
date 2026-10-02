@@ -51,7 +51,7 @@ def _php_setting_map_by_name(
     return mapping
 
 
-def _migrate_customer(config_path: str, customer_login: str, include_mail: bool) -> None:
+def _migrate_customer(config_path: str, customer_login: str, include_mail: bool, dry_run: bool = False) -> None:
     config = load_config(config_path)
     source = FroxlorClient(
         config.source.api_url,
@@ -117,7 +117,7 @@ def _migrate_customer(config_path: str, customer_login: str, include_mail: bool)
 
     runner = TransferRunner(
         config=config,
-        dry_run=False,
+        dry_run=dry_run,
         manifest_name=slugify(f"bootstrap-apply-{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"),
     )
     migrator = Migrator(config=config, source=source, target=target, runner=runner)
@@ -158,10 +158,11 @@ def main() -> int:
     parser.add_argument("--config", required=True, help="Path to config TOML")
     parser.add_argument("--customer", action="append", required=True, help="Customer login (repeatable)")
     parser.add_argument("--include-mail", action="store_true", help="Also migrate mailbox content via doveadm")
+    parser.add_argument("--dry-run", action="store_true", help="Plan only — no writes to the target panel or filesystem")
     args = parser.parse_args()
 
     for login in args.customer:
-        _migrate_customer(args.config, login, include_mail=args.include_mail)
+        _migrate_customer(args.config, login, include_mail=args.include_mail, dry_run=args.dry_run)
     return 0
 
 
