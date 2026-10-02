@@ -708,3 +708,50 @@ indirection without real clarity; revisit only if they grow.
 - Subdomain `phpsettingid` unmapped → `0` (inherit), while main domains
   fall back to the source id — asymmetric but harmless; revisit if a
   target rejects `0`.
+
+### Round 9 — integration-test feature audit + coverage gaps
+
+Audited the docker testbed end-to-end (seed → apply → verify) against the
+full migrator surface. Gaps found and closed (`e190794`):
+
+- **`--include-mail` was never passed** — `Selection.include_mail` was
+  always False, so `TransferRunner.transfer_mailbox` (the
+  `doveadm backup | ssh doveadm dsync-server` path) had zero e2e
+  coverage; the mail probe was pushed by a manual doveadm call that
+  bypassed the migrator entirely. The probe message now flows through
+  the real `transfer_mailbox` code path.
+- **No custom DNS zone records seeded** — zone sync and `verify_zone`
+  compared two empty sets. Seeded TXT + CNAME fixtures on
+  `secure-demo.test` (requires `system.bind_enable` + per-domain
+  `isbinddomain`, now set in bootstrap), plus a `verify_dns_zones`
+  seed-side check.
+- **No idempotent re-run** — the apply now runs twice, with a
+  deliberately drifted target zone record in between, exercising every
+  update/dedup path.
+
+The new coverage immediately caught three real production bugs
+(`1bf52d8`, `3e2626e`):
+
+- `Certificates.update` was called with the `domain_ssl_settings` row id
+  where Froxlor expects the **domain** id — the row id silently aliased
+  an unrelated domain on re-runs (412 in the test, silent corruption
+  risk in production). Now passes `domainid`.
+- `DomainZones.listing` rows carry `domain_id`, not `domainname` —
+  `_ensure_domain_zones` grouped every record under `""` and skipped
+  them: zone sync was a complete silent no-op. Now resolves names via a
+  lazy `domain_id → domain` map.
+- `DomainZones.update` is an unconditional 303 stub in Froxlor ("delete
+  it and re-add it") — and `api.call()` only treated `status >= 400` as
+  an error, so the throw slipped through as success. Near-match drift
+  now uses `DomainZones.delete` + `add`; `call()` treats any non-2xx
+  status as an error.
+
+#### Remaining e2e coverage gaps (accepted/documented)
+
+- Domain-only mode / pre-selected `target_customer` rename path —
+  unit-tested only.
+- `ip_mapping` — both panels share one IP; nothing to map against.
+- `letsencrypt=True` propagation — all fixtures are `letsencrypt=0`;
+  real ACME would fail on `.test` domains (the call is non-fatal by
+  design).
+- `custbeta` is seeded but not migrated (mail-domain fixtures only).
