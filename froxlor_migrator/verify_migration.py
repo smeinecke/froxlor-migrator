@@ -405,13 +405,15 @@ def _compare_subdomain(
 
 
 def _relative_ftp_path(row: dict[str, Any], customer_login: str) -> str:
-    """Docroot-relative FTP path; '/' when the homedir is the customer root."""
-    ftp_path = str(pick(row, "path", default="")).strip().strip("/")
-    if not ftp_path:
-        homedir = str(pick(row, "homedir", default="")).strip()
-        marker = f"/{customer_login.strip('/')}/"
-        if customer_login and marker in homedir:
-            ftp_path = homedir.split(marker, 1)[1].strip("/")
+    """Docroot-relative FTP path; '/' when the homedir is the customer root.
+
+    Mirrors the migrator's ``relative_customer_path(path or homedir)``
+    derivation so absolute source paths embedding the login normalize the
+    same way on both sides."""
+    ftp_path = relative_customer_path(
+        str(pick(row, "path", default="")) or str(pick(row, "homedir", default="")),
+        customer_login,
+    )
     return ftp_path or "/"
 
 
@@ -795,70 +797,86 @@ def _load_customer_resources(
     src_id: int,
     dst_id: int,
     source_roots: list[str],
-) -> dict[str, Any] | None:
+    cert_cache: dict[str, dict[str, dict[str, Any]]] | None = None,
+) -> dict[str, Any]:
     """List every comparable collection for one customer pair.
 
-    Returns None when any listing call fails; the caller records the
-    failure and moves on to the next customer."""
-    try:
-        src_domains = {domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
-        return {
-            "domains": src_domains,
-            "dst_domains": {domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)},
-            "subdomains": _named_rows(lambda: source.list_subdomains(customerid=src_id, loginname=login), domain_name, args.skip_subdomains),
-            "dst_subdomains": _named_rows(lambda: target.list_subdomains(customerid=dst_id, loginname=login), domain_name, args.skip_subdomains),
-            "migratable_domain_names": {
-                name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
-            },
-            "mails": _named_rows(lambda: source.list_emails(customerid=src_id, loginname=login), mailbox_address, args.skip_mail),
-            "dst_mails": _named_rows(lambda: target.list_emails(customerid=dst_id, loginname=login), mailbox_address, args.skip_mail),
-            "ftps": _named_rows(lambda: source.list_ftps(customerid=src_id, loginname=login), ftp_username, args.skip_ftp),
-            "dst_ftps": _named_rows(lambda: target.list_ftps(customerid=dst_id, loginname=login), ftp_username, args.skip_ftp),
-            "dir_protections": _named_rows(
-                lambda: source.list_dir_protections(customerid=src_id, loginname=login),
-                lambda x: _dir_protection_name(x, login),
-                args.skip_dir_protections,
-            ),
-            "dst_dir_protections": _named_rows(
-                lambda: target.list_dir_protections(customerid=dst_id, loginname=login),
-                lambda x: _dir_protection_name(x, login),
-                args.skip_dir_protections,
-            ),
-            "dir_options": _named_rows(
-                lambda: source.list_dir_options(customerid=src_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
-            ),
-            "dst_dir_options": _named_rows(
-                lambda: target.list_dir_options(customerid=dst_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
-            ),
-            "ssh_keys": _named_rows(lambda: source.list_ssh_keys(customerid=src_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
-            "dst_ssh_keys": _named_rows(lambda: target.list_ssh_keys(customerid=dst_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
-            "data_dumps": _key_set(lambda: source.list_data_dumps(customerid=src_id, loginname=login, strict=True), data_dump_key, args.skip_data_dumps),
-            "dst_data_dumps": _key_set(lambda: target.list_data_dumps(customerid=dst_id, loginname=login, strict=True), data_dump_key, args.skip_data_dumps),
-            "forwarders": _key_set(
-                lambda: source.list_email_forwarders(customerid=src_id, loginname=login, strict=True),
-                _forwarder_key,
-                args.skip_forwarders,
-            ),
-            "dst_forwarders": _key_set(
-                lambda: target.list_email_forwarders(customerid=dst_id, loginname=login, strict=True),
-                _forwarder_key,
-                args.skip_forwarders,
-            ),
-            "senders": _key_set(
-                lambda: source.list_email_senders(customerid=src_id, loginname=login, strict=True),
-                _sender_key,
-                args.skip_sender_aliases,
-            ),
-            "dst_senders": _key_set(
-                lambda: target.list_email_senders(customerid=dst_id, loginname=login, strict=True),
-                _sender_key,
-                args.skip_sender_aliases,
-            ),
-            "certs": {} if args.skip_certificates else _cert_map(source),
-            "dst_certs": {} if args.skip_certificates else _cert_map(target),
-        }
-    except FroxlorApiError:
-        return None
+    Raises FroxlorApiError when any listing call fails; the caller
+    records the failure and moves on to the next customer."""
+    src_domains = {domain_name(x): x for x in source.list_domains(customerid=src_id, loginname=login)}
+    return {
+        "domains": src_domains,
+        "dst_domains": {domain_name(x): x for x in target.list_domains(customerid=dst_id, loginname=login)},
+        "subdomains": _named_rows(lambda: source.list_subdomains(customerid=src_id, loginname=login), domain_name, args.skip_subdomains),
+        "dst_subdomains": _named_rows(lambda: target.list_subdomains(customerid=dst_id, loginname=login), domain_name, args.skip_subdomains),
+        "migratable_domain_names": {
+            name for name, row in src_domains.items() if _docroot_in_any_root(str(pick(row, "documentroot", default="")), source_roots)
+        },
+        "mails": _named_rows(lambda: source.list_emails(customerid=src_id, loginname=login), mailbox_address, args.skip_mail),
+        "dst_mails": _named_rows(lambda: target.list_emails(customerid=dst_id, loginname=login), mailbox_address, args.skip_mail),
+        "ftps": _named_rows(lambda: source.list_ftps(customerid=src_id, loginname=login), ftp_username, args.skip_ftp),
+        "dst_ftps": _named_rows(lambda: target.list_ftps(customerid=dst_id, loginname=login), ftp_username, args.skip_ftp),
+        "dir_protections": _named_rows(
+            lambda: source.list_dir_protections(customerid=src_id, loginname=login),
+            lambda x: _dir_protection_name(x, login),
+            args.skip_dir_protections,
+        ),
+        "dst_dir_protections": _named_rows(
+            lambda: target.list_dir_protections(customerid=dst_id, loginname=login),
+            lambda x: _dir_protection_name(x, login),
+            args.skip_dir_protections,
+        ),
+        "dir_options": _named_rows(
+            lambda: source.list_dir_options(customerid=src_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
+        ),
+        "dst_dir_options": _named_rows(
+            lambda: target.list_dir_options(customerid=dst_id, loginname=login), lambda x: _dir_option_name(x, login), args.skip_dir_options
+        ),
+        "ssh_keys": _named_rows(lambda: source.list_ssh_keys(customerid=src_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
+        "dst_ssh_keys": _named_rows(lambda: target.list_ssh_keys(customerid=dst_id, loginname=login), ssh_key_identity, args.skip_ssh_keys),
+        "data_dumps": _key_set(
+            lambda: source.list_data_dumps(customerid=src_id, loginname=login, strict=True),
+            lambda x: data_dump_key(x, login),
+            args.skip_data_dumps,
+        ),
+        "dst_data_dumps": _key_set(
+            lambda: target.list_data_dumps(customerid=dst_id, loginname=login, strict=True),
+            lambda x: data_dump_key(x, login),
+            args.skip_data_dumps,
+        ),
+        "forwarders": _key_set(
+            lambda: source.list_email_forwarders(customerid=src_id, loginname=login, strict=True),
+            _forwarder_key,
+            args.skip_forwarders,
+        ),
+        "dst_forwarders": _key_set(
+            lambda: target.list_email_forwarders(customerid=dst_id, loginname=login, strict=True),
+            _forwarder_key,
+            args.skip_forwarders,
+        ),
+        "senders": _key_set(
+            lambda: source.list_email_senders(customerid=src_id, loginname=login, strict=True),
+            _sender_key,
+            args.skip_sender_aliases,
+        ),
+        "dst_senders": _key_set(
+            lambda: target.list_email_senders(customerid=dst_id, loginname=login, strict=True),
+            _sender_key,
+            args.skip_sender_aliases,
+        ),
+        # Certificate listings are customer-independent — share one listing
+        # per panel across the whole run via cert_cache.
+        "certs": {} if args.skip_certificates else _cached_cert_map(cert_cache, "src", source),
+        "dst_certs": {} if args.skip_certificates else _cached_cert_map(cert_cache, "dst", target),
+    }
+
+
+def _cached_cert_map(cache: dict[str, dict[str, dict[str, Any]]] | None, key: str, client: FroxlorClient) -> dict[str, dict[str, Any]]:
+    if cache is None:
+        return _cert_map(client)
+    if key not in cache:
+        cache[key] = _cert_map(client)
+    return cache[key]
 
 
 def _verify_domains(
@@ -1039,6 +1057,7 @@ def _verify_customer(
     source_php_map,
     target_php_map,
     panel_query: Callable[[str], list[list[str]]],
+    cert_cache: dict[str, dict[str, dict[str, Any]]] | None = None,
 ) -> int:
     """Verify one customer pair. Returns the number of failed checks."""
     report = _Report(login)
@@ -1060,9 +1079,10 @@ def _verify_customer(
         report.fail("; ".join(customer_errs))
 
     source_roots = [config.paths.source_web_root, config.paths.source_transfer_root]
-    res = _load_customer_resources(args, source, target, login, src_id, dst_id, source_roots)
-    if res is None:
-        report.fail("could not list resources")
+    try:
+        res = _load_customer_resources(args, source, target, login, src_id, dst_id, source_roots, cert_cache)
+    except FroxlorApiError as exc:
+        report.fail(f"could not list resources ({exc})")
         return report.failures
 
     src_redirects: dict[str, Any] = {}
@@ -1144,6 +1164,7 @@ def main() -> int:
     logins = requested if requested else sorted(set(source_customers) & set(target_customers))
 
     failures = 0
+    cert_cache: dict[str, dict[str, dict[str, Any]]] = {}
     target_session_stack: ExitStack | None = None
     target_panel_query_fn: Callable[[str], list[list[str]]] | None = None
 
@@ -1169,6 +1190,7 @@ def main() -> int:
                 source_php_map,
                 target_php_map,
                 _target_panel_query,
+                cert_cache,
             )
     finally:
         if target_session_stack is not None:

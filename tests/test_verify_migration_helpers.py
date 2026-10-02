@@ -258,9 +258,10 @@ class VerifyMigrationHelpersTests(unittest.TestCase):
         # Empty source path + homedir under the customer dir → homedir suffix.
         source = {"path": "", "homedir": "/var/www/srcuser/web/site"}
         self.assertEqual("web/site", _expected_ftp_path(source, "srcuser", "dstuser"))
-        # Empty path + homedir outside customer dir → "/" (customer docroot).
+        # Empty path + homedir outside customer dir → migrator stores the
+        # verbatim relative path (the account gets nested under docroot).
         source = {"path": "", "homedir": "/home/other"}
-        self.assertEqual("/", _expected_ftp_path(source, "srcuser", "dstuser"))
+        self.assertEqual("home/other", _expected_ftp_path(source, "srcuser", "dstuser"))
         # Main-account homedir == customer dir → "/" (no nested login subdir).
         source = {"path": "", "homedir": "/var/www/srcuser/"}
         self.assertEqual("/", _expected_ftp_path(source, "srcuser", "dstuser"))
