@@ -28,10 +28,10 @@ vulture:
 complexity:
 	uv run radon cc froxlor_migrator -a -nc
 
-# Informational only — several long functions intentionally stay above the
-# default B rank (see docs/TODO_CICD.md). Not part of `validate` or CI.
+# Enforced gate — every block currently ranks ≤ B, so -b C fails CI on any
+# new C-rank-or-worse function (regression protection).
 xenon:
-	uv run xenon -b D -m B -a B froxlor_migrator
+	uv run xenon -b C -m B -a B froxlor_migrator
 
 bandit:
 	uv run bandit -c pyproject.toml -r froxlor_migrator
@@ -52,7 +52,7 @@ test-integration:
 	uv run pytest tests/test_integration_compose.py -v -m integration --timeout=900 --no-cov
 
 # Validate the code (format + check)
-validate: format check complexity pyright vulture bandit
+validate: format check complexity xenon pyright vulture bandit
 	@echo "Validation passed. Your code is ready to push."
 
 # Help target
@@ -66,7 +66,7 @@ help:
 	@echo "  fix              - Run reformat-ruff and fix-ruff"
 	@echo "  vulture          - Run dead code detection"
 	@echo "  complexity       - Run complexity analysis (radon)"
-	@echo "  xenon            - Run xenon complexity check (informational)"
+	@echo "  xenon            - Run xenon complexity check (enforced, -b C)"
 	@echo "  bandit           - Run bandit security lint"
 	@echo "  pyright          - Run type checking"
 	@echo "  test             - Run unit tests"

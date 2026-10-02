@@ -39,6 +39,9 @@ jobs:
       - name: Vulture (dead code)
         run: uv run vulture . --exclude .venv,migrations,tests,docs,testing --make-whitelist
 
+      - name: Xenon (cyclomatic complexity)
+        run: uv run xenon -b C -m B -a B froxlor_migrator
+
       - name: Bandit (security)
         run: uv run bandit -c pyproject.toml -r froxlor_migrator
 

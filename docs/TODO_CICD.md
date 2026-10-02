@@ -50,11 +50,10 @@ CI/tooling structure now follows llro's setup
 
 ## Still open / deferred
 
-- [ ] **Xenon gating** — `_iter_mysql_statements`, `run_app`,
-  `_build_replay_command`, `list_email_forwarders`, `verify.main`, and
-  `Migrator.execute` all rank E/F. Real fix is refactoring (tracked by the
-  N+1/structural items in TODO.md), not threshold-tuning; `make xenon`
-  stays informational until then.
+- [x] **Xenon gating** — all rank-E/F blocks were refactored in round 7
+  (scanner class, phase extraction, shared normalizers); every block now
+  ranks ≤ B, so the gate runs at `-b C -m B -a B` (any new C-rank function
+  fails). Enforced in `make validate` and the CI validate job.
 
 ## Verified while adopting
 

@@ -224,7 +224,8 @@ severity/confidence.
   warning. Use the row's parent-domain field or suffix-match against known
   domains.
 
-- [ ] **N+1 listing refresh pattern**. `_get_target_domain` runs an unfiltered
+- [x] **N+1 listing refresh pattern** (resolved in round 7, `aac213b` +
+  round 8 `d75492f`/`eadaedc`). `_get_target_domain` runs an unfiltered
   `Domains.listing` ~3× per domain (`core.py:284-288`, `domains.py:355-383`);
   `accounts.py:130,266,315,423` and `domains.py:620-621` re-list after every
   single add/update. O(N) full-panel listings per migration; also creates
@@ -274,9 +275,10 @@ severity/confidence.
 - [x] Path-only LRU caches go stale for the process lifetime
   (`transfer.py:297` `read_remote_file`, `froxlor_mysql.py:152-157`
   `_read_userdata_file`); `@cached` on a method also pins `self` alive.
-- [ ] PHP array extraction regexes truncate on `];`/`],` inside nested
+- [x] PHP array extraction regexes truncate on `];`/`],` inside nested
   structures (`froxlor_mysql.py:122-129`); multiple `sql_root` entries pick the
-  highest-scored rather than index 0.
+  highest-scored rather than index 0. — resolved in round 7 (`4377f5f`,
+  depth-aware `_php_bracket_span` scanner).
 - [x] `EmailAccounts.update` runs unconditionally when `has_account`
   (`accounts.py:411-421`) — fails if the target mailbox has no mail account.
 - [x] `int(data.get("status", 200))` (`api.py:117`) crashes on a non-numeric
@@ -367,16 +369,16 @@ changes.
 
 ## Still open / deferred
 
-- [ ] **N+1 listing refresh pattern** — `list_*` called per item across
+- [x] **N+1 listing refresh pattern** — `list_*` called per item across
   accounts/domains after each write (`accounts.py`, `domains.py`,
   `core.py:284`). O(n) full-panel API listings per migration; needs a
-  snapshot/refresh design.
+  snapshot/refresh design. — resolved in round 7 (`aac213b`).
 
-- [ ] **PHP array extraction regexes truncate on `];`/`],` inside nested
+- [x] **PHP array extraction regexes truncate on `];`/`],` inside nested
   structures** (`froxlor_mysql.py` `_extract_php_array_body` /
   `_extract_first_sql_root_entry`); multiple `sql_root` entries pick the
   highest-scored rather than index 0. Needs a real `userdata.inc.php`
-  fixture set before rewriting.
+  fixture set before rewriting. — resolved in round 7 (`4377f5f`).
 
 - [x] **Local `TransferRunner.run` has no timeout** (`transfer.py:90`) —
   fixed: `[behavior] local_command_timeout_seconds` (0 = disabled by
@@ -593,15 +595,15 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
   normalization of dir-protection/dir-option keys is consistent.
 - `transfer_files` already runs under `bash -o pipefail`.
 
-### Still open / deferred
+### Still open / deferred (all resolved in round 7)
 
-- [ ] **N+1 listing refreshes** — every ensure-* re-lists target rows
-  per item; needs a snapshot/cache design pass.
-- [ ] **PHP `userdata.inc.php` nested-array regexes** — best-effort;
-  needs real fixtures before a rewrite.
-- [ ] **Local `run()` timeout** — `[behavior] local_command_timeout_seconds`
+- [x] **N+1 listing refreshes** — every ensure-* re-lists target rows
+  per item; needs a snapshot/cache design pass. → `aac213b`
+- [x] **PHP `userdata.inc.php` nested-array regexes** — best-effort;
+  needs real fixtures before a rewrite. → `4377f5f` (`_php_bracket_span`)
+- [x] **Local `run()` timeout** — `[behavior] local_command_timeout_seconds`
   exists (0=disabled); tar/doveadm on huge trees may exceed an hour —
-  needs per-call policy, not a blunt global default.
+  needs per-call policy, not a blunt global default. → `663b64a`
 
 ### Round 7 (structural debt — all three deferred items resolved)
 
