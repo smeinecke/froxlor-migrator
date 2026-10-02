@@ -147,6 +147,39 @@ class MigratorDomainOpsTests(unittest.TestCase):
         self.assertFalse(any("chown" in c for c in calls))
         self.assertTrue(any("not found" in w for w in warnings))
 
+    def test_fix_transferred_docroot_ownership_uses_guid_when_user_missing(self) -> None:
+        import types as _t
+
+        ops = DummyDomainOps()
+        ops.runner.dry_run = False
+        calls: list[str] = []
+
+        def run_remote(cmd, check=True, sensitive=False):
+            calls.append(cmd)
+            return _t.SimpleNamespace(returncode=1 if cmd.startswith("id -u") else 0)
+
+        ops.runner.run_remote = run_remote
+        ops._run_target_panel_query = lambda sql: [["10042"]]
+        ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
+        self.assertIn("sudo chown -R 10042:10042 /tmp/foo", calls)
+
+    def test_fix_transferred_docroot_ownership_ignores_nonnumeric_guid(self) -> None:
+        import types as _t
+
+        ops = DummyDomainOps()
+        ops.runner.dry_run = False
+        calls: list[str] = []
+
+        def run_remote(cmd, check=True, sensitive=False):
+            calls.append(cmd)
+            return _t.SimpleNamespace(returncode=1 if cmd.startswith("id -u") else 0)
+
+        ops.runner.run_remote = run_remote
+        ops._run_target_panel_query = lambda sql: [["abc"]]
+        ops._debug = lambda msg, **kw: None
+        ops._fix_transferred_docroot_ownership("/tmp/foo", "tgt")
+        self.assertFalse(any("chown" in c for c in calls))
+
     def test_ensure_domains_updates_existing_domain(self) -> None:
         calls: list[tuple[str, dict[str, object]]] = []
 

@@ -822,14 +822,31 @@ class MigratorDomainOps:
             return
         sudo = remote_sudo_prefix(self.config)
         owner = shlex.quote(target_login)
-        # Froxlor creates the customer's system user asynchronously via cron
-        # tasks; right after Customers.add it may not exist on the target yet.
+        # Froxlor creates the customer's system user asynchronously via the
+        # CREATE_HOME cron task; right after Customers.add it may not exist on
+        # the target yet.
         probe = self.runner.run_remote(f"id -u {owner} >/dev/null 2>&1", check=False)
-        if probe.returncode != 0:
+        if probe.returncode == 0:
+            self.runner.run_remote(f"{sudo}chown -R {owner}:{owner} {shlex.quote(target_docroot)}")
+            return
+        # Fall back to the numeric uid/gid Froxlor already assigned on the
+        # panel_customers.guid column — same value the cron-created system
+        # user will get, so ownership is correct once the user exists.
+        guid = self._target_customer_guid(target_login)
+        if guid is None:
             self._debug(
-                f"system user {target_login} not found on target; skipping ownership fix for {target_docroot}",
+                f"system user {target_login} not found on target and no panel guid; skipping ownership fix for {target_docroot}",
                 login=target_login,
                 docroot=target_docroot,
             )
             return
-        self.runner.run_remote(f"{sudo}chown -R {owner}:{owner} {shlex.quote(target_docroot)}")
+        self.runner.run_remote(f"{sudo}chown -R {guid}:{guid} {shlex.quote(target_docroot)}")
+
+    def _target_customer_guid(self, target_login: str) -> str | None:
+        rows = self._run_target_panel_query(
+            f"SELECT guid FROM panel_customers WHERE loginname={self._sql_utf8_literal(target_login)} LIMIT 1;"
+        )
+        if not rows:
+            return None
+        guid = str(rows[0][0]).strip()
+        return guid if guid.isdigit() else None
