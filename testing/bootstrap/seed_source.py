@@ -903,6 +903,28 @@ def set_customer_2fa(
     )
 
 
+def seed_db_marker(db_name: str, db_host: str, db_port: str, db_root_user: str, db_root_pass: str) -> None:
+    """Create a marker table + row via root — Froxlor scopes customer DB users
+    to mysql_access_hosts (localhost), so remote logins as the customer user
+    are refused."""
+    subprocess.run(
+        [
+            "python3",
+            "-c",
+            (
+                "import pymysql; "
+                f"conn=pymysql.connect(host={db_host!r}, port={int(db_port)!r}, user={db_root_user!r}, password={db_root_pass!r}, database={db_name!r}, autocommit=True); "
+                "cur=conn.cursor(); "
+                "cur.execute('CREATE TABLE IF NOT EXISTS migrator_marker (id INT PRIMARY KEY, note VARCHAR(128))'); "
+                "cur.execute(\"INSERT INTO migrator_marker (id, note) VALUES (1, 'seeded-for-parity') "
+                "ON DUPLICATE KEY UPDATE note=VALUES(note)\"); "
+                "cur.close(); conn.close()"
+            ),
+        ],
+        check=True,
+    )
+
+
 def ensure_wordpress_files(target_dir: Path, db_name: str, db_password: str) -> None:
     target_dir.mkdir(parents=True, exist_ok=True)
     if (target_dir / "wp-includes").exists():
@@ -1242,6 +1264,7 @@ def main() -> None:
         db_root_pass=db_root_pass,
         panel_db_name=panel_db_name,
     )
+    seed_db_marker(wp_db, db_host, db_port, db_root_user, db_root_pass)
     ensure_database(
         api,
         customer_id=cust_a_id,

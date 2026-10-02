@@ -15,6 +15,7 @@ This folder provides a reproducible local test setup for the migrator:
 - one additional redirect domain with custom domain config
 - one forwarding-domain fixture (`forward-demo.test` -> `secure-demo.test`) with explicit redirect code
   - one explicit subdomain fixture with dedicated settings
+  - a `migrator_marker` row in the WordPress database, compared on the target after migration
 - one FTP account fixture
 - one SSH key fixture bound to FTP user `custgammaftp1`
 - one directory-protection fixture and matching directory-options fixture
@@ -120,6 +121,7 @@ This performs the full migration flow for seeded test customers:
 4. a second apply after deliberately drifting a target DNS record — exercises all update/dedup paths plus the zone delete-and-re-add repair (`DomainZones.update` is a stub in Froxlor)
 5. `verify_migration` for all three customers, plus the mailbox probe assertion
 6. a negative check: a migrated zone record is deleted on the target and `verify_migration` must fail — then a final apply + verify restores parity
+7. byte-level file-content parity between source and target customer dirs, docroot ownership matching the customer's `panel_customers.guid`, and the `migrator_marker` database row on the target
 
 It also injects a probe email into source mailbox `alerts@secure-demo.test` before the first apply and asserts that the exact probe reaches the target through the migrator's own `doveadm backup | dsync-server` transfer. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
 
