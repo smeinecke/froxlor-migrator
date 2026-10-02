@@ -34,6 +34,7 @@ class MigratorDomainOps:
         def _load_source_dkim_private_key(self, domain_name: str) -> str: ...
         def _run_source_panel_query(self, sql: str) -> list[list[str]]: ...
         def _run_target_panel_query(self, sql: str) -> list[list[str]]: ...
+        def _sql_identifier(self, value: str) -> str: ...
         def _sql_string_literal(self, value: str) -> str: ...
         def _sql_utf8_literal(self, value: str) -> str: ...
         def _sync_dkim_keys_db(self, domain_name: str, dkim_pubkey: str, dkim_privkey: str) -> None: ...
@@ -123,12 +124,20 @@ class MigratorDomainOps:
             existing_target_cert = target_by_domain.get(domain_name)
             if existing_target_cert:
                 cert_id = as_int(pick(existing_target_cert, "id", default=0))
-                self.target.call("Certificates.update", {**cert_payload, "id": cert_id})
+                written = self.target.call("Certificates.update", {**cert_payload, "id": cert_id})
             else:
-                self.target.call("Certificates.add", cert_payload)
+                written = self.target.call("Certificates.add", cert_payload)
 
-            refreshed_target = {str(pick(cert, "domainname", "domain", default="")).lower(): cert for cert in self.target.listing("Certificates.listing")}
-            target_cert = refreshed_target.get(domain_name)
+            # Certificates.add/update both return the Certificates.get row —
+            # merge it instead of re-listing the whole collection per domain.
+            if not isinstance(written, dict):
+                try:
+                    written = self.target.call("Certificates.get", {"domainname": domain_name})
+                except FroxlorApiError:
+                    written = None
+            if isinstance(written, dict):
+                target_by_domain[domain_name] = written
+            target_cert = target_by_domain.get(domain_name)
             if not target_cert:
                 raise MigrationError(f"Certificate migration failed for domain: {domain_name}")
 
@@ -138,10 +147,9 @@ class MigratorDomainOps:
                 if expected != actual:
                     raise MigrationError(f"Certificate mismatch for {domain_name}: {field} expected={len(expected)}B actual={len(actual)}B")
 
-    def _build_ip_value_mapping(self, domains: list[dict[str, Any]], ip_mapping: dict[int, int]) -> dict[str, str]:
-        if not ip_mapping:
-            return {}
-
+    def _source_ip_by_id(self, domains: list[dict[str, Any]], needed_ids: set[int]) -> dict[int, str]:
+        """{ip_id: ip} from the selected domain rows, topped up from
+        IpsAndPorts.listing for mapped ids no selected domain uses."""
         source_ip_by_id: dict[int, str] = {}
         for domain in domains:
             for ip_row in pick(domain, "ipsandports", default=[]) or []:
@@ -149,7 +157,7 @@ class MigratorDomainOps:
                 source_ip = str(pick(ip_row, "ip", default="")).strip().lower()
                 if source_ip_id > 0 and source_ip:
                     source_ip_by_id[source_ip_id] = source_ip
-        missing_source_ids = [as_int(source_id) for source_id in ip_mapping if as_int(source_id) > 0 and as_int(source_id) not in source_ip_by_id]
+        missing_source_ids = needed_ids - set(source_ip_by_id)
         if missing_source_ids:
             for row in self.source.listing("IpsAndPorts.listing"):
                 source_ip_id = as_int(pick(row, "id", default=0))
@@ -158,7 +166,13 @@ class MigratorDomainOps:
                 source_ip = str(pick(row, "ip", default="")).strip().lower()
                 if source_ip:
                     source_ip_by_id[source_ip_id] = source_ip
+        return source_ip_by_id
 
+    def _build_ip_value_mapping(self, domains: list[dict[str, Any]], ip_mapping: dict[int, int]) -> dict[str, str]:
+        if not ip_mapping:
+            return {}
+
+        source_ip_by_id = self._source_ip_by_id(domains, {as_int(source_id) for source_id in ip_mapping if as_int(source_id) > 0})
         target_ip_by_id = {
             as_int(pick(row, "id", default=0)): str(pick(row, "ip", default="")).strip().lower()
             for row in self.target.listing("IpsAndPorts.listing")
@@ -396,32 +410,41 @@ class MigratorDomainOps:
             if not target_domain:
                 raise MigrationError(f"Could not reload target domain after update: {domain_name}")
             self._verify_domain_settings(domain_name, target_docroot, base_payload, target_domain)
+            self._sync_domain_dkim(domain, domain_name, target_domain)
+            self._verify_domain_ip_mapping(domain_name, target_domain, mapped_ip_ids)
 
-            source_dkim_public = str(pick(domain, "dkim_pubkey", default=""))
-            # Domains.listing strips dkim_privkey; load it from the panel DB.
-            source_dkim_private = str(pick(domain, "dkim_privkey", default="")).strip()
-            target_dkim_public = str(pick(target_domain, "dkim_pubkey", default=""))
-            if source_dkim_public and source_dkim_public != target_dkim_public:
-                if not source_dkim_private:
-                    source_dkim_private = self._load_source_dkim_private_key(domain_name)
-                if not source_dkim_private:
-                    raise MigrationError(f"DKIM key mismatch for {domain_name} and source private key is empty")
-                self._sync_dkim_keys_db(domain_name, source_dkim_public, source_dkim_private)
-                if self.runner.dry_run:
-                    continue
-                # The DB write bypasses the API — the cached row is stale.
-                target_domain = self._refresh_target_domain(domain_name)
-                if not target_domain:
-                    raise MigrationError(f"Could not reload target domain after DKIM DB sync: {domain_name}")
-                target_dkim_public = str(pick(target_domain, "dkim_pubkey", default=""))
-                if source_dkim_public != target_dkim_public:
-                    raise MigrationError(f"DKIM public key mismatch for {domain_name} after DB sync fallback")
+    def _sync_domain_dkim(self, source_domain: ResourceRow, domain_name: str, target_domain: ResourceRow) -> None:
+        """Copy DKIM keys via the panel DB when the target pubkey differs.
 
-            if mapped_ip_ids:
-                actual_ip_ids = {as_int(pick(item, "id", default=0)) for item in pick(target_domain, "ipsandports", default=[]) or []}
-                missing_ip_ids = {ip_id for ip_id in mapped_ip_ids if ip_id not in actual_ip_ids}
-                if missing_ip_ids:
-                    raise MigrationError(f"Domain IP mapping mismatch after migration for {domain_name}: missing target IP ids {sorted(missing_ip_ids)}")
+        Domains.listing/get strip dkim_privkey, so the private key is loaded
+        from the source panel DB and both keys are written on the target.
+        """
+        source_dkim_public = str(pick(source_domain, "dkim_pubkey", default=""))
+        target_dkim_public = str(pick(target_domain, "dkim_pubkey", default=""))
+        if not source_dkim_public or source_dkim_public == target_dkim_public:
+            return
+        source_dkim_private = str(pick(source_domain, "dkim_privkey", default="")).strip()
+        if not source_dkim_private:
+            source_dkim_private = self._load_source_dkim_private_key(domain_name)
+        if not source_dkim_private:
+            raise MigrationError(f"DKIM key mismatch for {domain_name} and source private key is empty")
+        self._sync_dkim_keys_db(domain_name, source_dkim_public, source_dkim_private)
+        if self.runner.dry_run:
+            return
+        # The DB write bypasses the API — the cached row is stale.
+        refreshed = self._refresh_target_domain(domain_name)
+        if not refreshed:
+            raise MigrationError(f"Could not reload target domain after DKIM DB sync: {domain_name}")
+        if source_dkim_public != str(pick(refreshed, "dkim_pubkey", default="")):
+            raise MigrationError(f"DKIM public key mismatch for {domain_name} after DB sync fallback")
+
+    def _verify_domain_ip_mapping(self, domain_name: str, target_domain: ResourceRow, mapped_ip_ids: list[int]) -> None:
+        if not mapped_ip_ids:
+            return
+        actual_ip_ids = {as_int(pick(item, "id", default=0)) for item in pick(target_domain, "ipsandports", default=[]) or []}
+        missing_ip_ids = {ip_id for ip_id in mapped_ip_ids if ip_id not in actual_ip_ids}
+        if missing_ip_ids:
+            raise MigrationError(f"Domain IP mapping mismatch after migration for {domain_name}: missing target IP ids {sorted(missing_ip_ids)}")
 
     def _enable_letsencrypt_after_dns(self, domains: list[dict[str, Any]]) -> None:
         for domain in domains:
@@ -488,7 +511,7 @@ class MigratorDomainOps:
         panel_row_exists = bool(existing_panel_rows and existing_panel_rows[0] and as_int(existing_panel_rows[0][0], default=0) > 0)
 
         # Keep fallback idempotent across retries if database was physically created in a previous partial run.
-        self._exec_target_mysql_sql(f"CREATE DATABASE IF NOT EXISTS `{src_name}`", "mysql")
+        self._exec_target_mysql_sql(f"CREATE DATABASE IF NOT EXISTS {self._sql_identifier(src_name)}", "mysql")
         for host in mysql_access_hosts:
             self._exec_target_mysql_sql(
                 "CREATE USER IF NOT EXISTS "
@@ -497,12 +520,12 @@ class MigratorDomainOps:
                 "mysql",
             )
             self._exec_target_mysql_sql(
-                f"GRANT ALL ON `{src_name}`.* TO {self._sql_string_literal(src_name)}@{self._sql_string_literal(host)};",
+                f"GRANT ALL ON {self._sql_identifier(src_name)}.* TO {self._sql_string_literal(src_name)}@{self._sql_string_literal(host)};",
                 "mysql",
             )
             if customer_login and self._target_mysql_user_exists(customer_login, host):
                 self._exec_target_mysql_sql(
-                    f"GRANT ALL ON `{src_name}`.* TO {self._sql_string_literal(customer_login)}@{self._sql_string_literal(host)};",
+                    f"GRANT ALL ON {self._sql_identifier(src_name)}.* TO {self._sql_string_literal(customer_login)}@{self._sql_string_literal(host)};",
                     "mysql",
                 )
         self._exec_target_mysql_sql("FLUSH PRIVILEGES;", "mysql")
