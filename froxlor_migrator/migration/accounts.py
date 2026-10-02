@@ -19,6 +19,7 @@ class MigratorAccountOps:
         def _mailbox_address(self, mailbox: ResourceRow) -> str: ...
         def _debug(self, message: str, **payload: Any) -> None: ...
         def _exec_target_panel_sql(self, sql: str) -> None: ...
+        def _run_target_panel_query(self, sql: str) -> list[list[str]]: ...
         def _sql_utf8_literal(self, value: str) -> str: ...
 
     def _ensure_mail_attribute_rows(
@@ -28,7 +29,7 @@ class MigratorAccountOps:
         list_target_rows: Callable[[], list[dict[str, Any]]],
         value_field: str,
         add_command: str,
-        add_fallback: Callable[[str, str], None] | None = None,
+        add_fallback: Callable[[str, str, FroxlorApiError], None] | None = None,
     ) -> None:
         """Shared forwarder/sender-alias dedup+add loop: rows are keyed by
         (mailbox address, value_field) and missing keys are added."""
@@ -58,10 +59,10 @@ class MigratorAccountOps:
                         "customerid": target_customer_id,
                     },
                 )
-            except FroxlorApiError:
+            except FroxlorApiError as exc:
                 if add_fallback is None:
                     raise
-                add_fallback(emailaddr, value)
+                add_fallback(emailaddr, value, exc)
             existing.add(key)
 
     def _ensure_email_forwarders(self, target_customer_id: int, forwarders: list[dict[str, Any]]) -> None:
@@ -80,15 +81,41 @@ class MigratorAccountOps:
             lambda: self.target.list_email_senders(customerid=target_customer_id),
             "allowed_sender",
             "EmailSender.add",
-            add_fallback=lambda email, sender: self._add_sender_alias_sql(email, sender, target_customer_id),
+            add_fallback=lambda email, sender, exc: self._add_sender_alias_sql(email, sender, target_customer_id, exc),
         )
 
-    def _add_sender_alias_sql(self, emailaddr: str, allowed_sender: str, target_customer_id: int = 0) -> None:
+    def _add_sender_alias_sql(
+        self,
+        emailaddr: str,
+        allowed_sender: str,
+        target_customer_id: int = 0,
+        api_error: FroxlorApiError | None = None,
+    ) -> None:
         """Fallback for EmailSender.add, which rejects admin-API callers when the
-        allowed_sender's domain is owned by a customer (validateLocalDomainOwnership
-        compares CurrentUser, not the target customer). Only used when the target
-        mailbox actually has a mail account — otherwise the API error was
-        legitimate and is re-raised."""
+        allowed_sender's domain is owned by *any* customer (validateLocalDomainOwnership
+        compares CurrentUser — the admin — not the target customer).
+
+        The SQL write is only justified for that specific failure: a 405 means
+        the sender-alias feature is disabled, and an absent panel_domains row
+        means the rejection was external-domain policy or validation — in both
+        cases the original API error is re-raised."""
+        if api_error is not None:
+            message = str(api_error).lower()
+            if "405" in message or "not enabled" in message or "cannot access this resource" in message:
+                raise api_error
+        # Wildcard "@domain.tld" → domain; "user@domain.tld" → domain.
+        sender_domain = allowed_sender.lstrip("@").rsplit("@", 1)[-1].strip().lower()
+        if not sender_domain:
+            if api_error is not None:
+                raise api_error
+            raise MigrationError(f"Cannot add sender alias {allowed_sender!r} for {emailaddr}: no domain to verify")
+        domain_rows = self._run_target_panel_query(f"SELECT customerid FROM panel_domains WHERE domain={self._sql_utf8_literal(sender_domain)} LIMIT 1;")
+        if not domain_rows:
+            # Domain not hosted on target — the API rejection was legitimate
+            # (external-domain policy or validation), not the admin bug.
+            if api_error is not None:
+                raise api_error
+            raise MigrationError(f"Cannot add sender alias {allowed_sender} for {emailaddr}: sender domain not hosted on target")
         target_row = self._reload_mailbox(target_customer_id, emailaddr)
         if target_row is None or not self._mailbox_has_account(target_row):
             raise MigrationError(f"Cannot add sender alias {allowed_sender} for {emailaddr}: target mailbox does not exist or has no mail account")

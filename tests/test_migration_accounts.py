@@ -80,6 +80,9 @@ class MigratorAccountOpsTests(unittest.TestCase):
         ops = StubOps(target)
         sql_calls: list[str] = []
         ops._exec_target_panel_sql = sql_calls.append  # type: ignore[method-assign]
+        # Sender domain "x" is hosted on the target → the admin-key rejection
+        # is the validateLocalDomainOwnership bug, so the SQL path applies.
+        ops._run_target_panel_query = lambda sql: [["7"]]  # type: ignore[method-assign]
         ops._sql_utf8_literal = lambda v: f"'{v}'"  # type: ignore[method-assign]
 
         ops._ensure_email_sender_aliases(1, [{"email": "b@x", "allowed_sender": "y@x"}])
@@ -87,6 +90,28 @@ class MigratorAccountOpsTests(unittest.TestCase):
             ["INSERT IGNORE INTO mail_sender_aliases SET email='b@x', allowed_sender='y@x';"],
             sql_calls,
         )
+
+    def test_sender_alias_fallback_reraises_when_domain_not_hosted(self) -> None:
+        """A sender domain absent from panel_domains means the API rejection
+        was legitimate policy/validation — the SQL fallback must not fire."""
+        target = StubTarget()
+
+        def failing_call(command: str, payload: dict[str, object]) -> None:
+            if command == "EmailSender.add":
+                raise FroxlorApiError('Given domain "nowhere" cannot be used.')
+            target.calls.append((command, payload))
+
+        target.call = failing_call  # type: ignore[method-assign]
+        target._emails = [{"email_full": "b@x", "popaccountid": 42}]
+        ops = StubOps(target)
+        sql_calls: list[str] = []
+        ops._exec_target_panel_sql = sql_calls.append  # type: ignore[method-assign]
+        ops._run_target_panel_query = lambda sql: []  # type: ignore[method-assign]
+        ops._sql_utf8_literal = lambda v: f"'{v}'"  # type: ignore[method-assign]
+
+        with self.assertRaises(FroxlorApiError):
+            ops._ensure_email_sender_aliases(1, [{"email": "b@x", "allowed_sender": "y@nowhere"}])
+        self.assertEqual([], sql_calls)
 
     def test_sender_alias_sql_fallback_raises_for_forward_only_mailbox(self) -> None:
         target = StubTarget()
@@ -101,6 +126,7 @@ class MigratorAccountOpsTests(unittest.TestCase):
         ops = StubOps(target)
         sql_calls: list[str] = []
         ops._exec_target_panel_sql = sql_calls.append  # type: ignore[method-assign]
+        ops._run_target_panel_query = lambda sql: [["7"]]  # type: ignore[method-assign]
         ops._sql_utf8_literal = lambda v: f"'{v}'"  # type: ignore[method-assign]
 
         with self.assertRaises(MigrationError):
