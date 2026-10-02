@@ -320,8 +320,8 @@ class MigratorDomainOpsTests(unittest.TestCase):
             "mod_fcgid_maxrequests": 20,
             "dont_use_default_ssl_ipandport_if_empty": True,
             "deactivated": True,
-            "ipandport": [{"id": 100}],
-            "ssl_ipandport": [{"id": 100}],
+            "ipandport": [100],
+            "ssl_ipandport": [100],
         }
 
         for key, expected_value in expected.items():

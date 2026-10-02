@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..api import FroxlorApiError
 from ..transfer import remote_sudo_prefix
-from ..util import as_int, is_custom_zone_record, pick, random_password, relative_customer_path, resolve_subdomain_parts
+from ..util import as_int, is_custom_zone_record, pick, random_password, relative_customer_path, replace_ip_tokens, resolve_subdomain_parts
 from .types import MigrationError, ResourceRow
 
 
@@ -195,17 +195,7 @@ class MigratorDomainOps:
         return mapping
 
     def _replace_ip_tokens(self, value: str, replacements: dict[str, str]) -> str:
-        if not value or not replacements:
-            return value
-        parts = re.split(r"(\s+)", value)
-        for index, part in enumerate(parts):
-            token = part.strip()
-            if not token:
-                continue
-            replacement = replacements.get(token.lower())
-            if replacement:
-                parts[index] = replacement
-        return "".join(parts)
+        return replace_ip_tokens(value, replacements)
 
     def _normalize_domain_setting_for_compare(self, value: Any) -> str:
         text = str(value or "")
@@ -293,9 +283,11 @@ class MigratorDomainOps:
             "deactivated": bool(as_int(pick(domain, "deactivated", default=0))),
         }
         if mapped_ip_ids:
-            payload["ipandport"] = [{"id": target_ip_id} for target_ip_id in sorted(set(mapped_ip_ids))]
+            # Froxlor's validateIpAddresses trim()s each element — a {"id": N}
+            # dict is a PHP 8 TypeError. Send plain integer ids.
+            payload["ipandport"] = sorted(set(mapped_ip_ids))
         if mapped_ssl_ip_ids:
-            payload["ssl_ipandport"] = [{"id": target_ip_id} for target_ip_id in sorted(set(mapped_ssl_ip_ids))]
+            payload["ssl_ipandport"] = sorted(set(mapped_ssl_ip_ids))
         return domain_name, target_docroot, payload, mapped_ip_ids
 
     def _domain_comparisons(self, target_docroot: str, payload: dict[str, Any], target_domain: ResourceRow) -> list[tuple[str, Any, Any]]:
@@ -843,9 +835,7 @@ class MigratorDomainOps:
         self.runner.run_remote(f"{sudo}chown -R {guid}:{guid} {shlex.quote(target_docroot)}")
 
     def _target_customer_guid(self, target_login: str) -> str | None:
-        rows = self._run_target_panel_query(
-            f"SELECT guid FROM panel_customers WHERE loginname={self._sql_utf8_literal(target_login)} LIMIT 1;"
-        )
+        rows = self._run_target_panel_query(f"SELECT guid FROM panel_customers WHERE loginname={self._sql_utf8_literal(target_login)} LIMIT 1;")
         if not rows:
             return None
         guid = str(rows[0][0]).strip()
