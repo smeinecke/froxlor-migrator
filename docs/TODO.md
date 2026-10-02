@@ -649,3 +649,60 @@ source→target migration against Froxlor 2.3.x containers. Fixed:
 `_choose_rows`/`preflight_commands`/`run` (C15). These are interactive
 prompts or retry/exec plumbing where further splitting would add
 indirection without real clarity; revisit only if they grow.
+
+### Round 8 (validation pass — edge cases + remaining N+1 spots)
+
+- [x] **Sender-alias SQL fallback scoped to the real bug** (`2051562`) —
+  `_add_sender_alias_sql` used to run on any `FroxlorApiError` from
+  `EmailSender.add`, silently bypassing legitimate rejections (feature
+  disabled → 405, `senderdomainexternal` policy, malformed addresses).
+  It now verifies the sender's domain exists in target `panel_domains`
+  (the actual `validateLocalDomainOwnership` admin-caller conflict)
+  before writing `mail_sender_aliases`, and re-raises the original API
+  error for everything else.
+
+- [x] **Dialect-aware `ALTER USER` for DB login hashes** (`d2abd9d`) —
+  the sync emitted MariaDB-only `IDENTIFIED VIA ... USING` /
+  `IDENTIFIED BY PASSWORD` unconditionally; MySQL 8 removed both in
+  favor of `IDENTIFIED WITH <plugin> AS '<hash>'`. Target `VERSION()`
+  is probed once per run (cached) and the matching syntax emitted.
+
+- [x] **Certificate listing N+1** (`d75492f`) —
+  `_migrate_domain_certificates` re-listed `Certificates.listing` after
+  every write; `Certificates.add`/`update` return the `get` row, so
+  the response is merged (single-row `Certificates.get` fallback for
+  older APIs/stubs). DKIM-sync and IP-mapping verify moved into
+  `_sync_domain_dkim`/`_verify_domain_ip_mapping` helpers.
+
+- [x] **Verify parity + per-customer cert listings** (`eadaedc`) —
+  `_relative_ftp_path` now delegates to `relative_customer_path` so an
+  absolute FTP `path`/`homedir` embedding the login normalizes exactly
+  like the migrator's write (was a false-mismatch); `data_dump_key`
+  gets the login fallback matching the migrator's key derivation;
+  `Certificates.listing` results are shared across all customers via a
+  lazy `cert_cache` instead of two full listings per customer.
+
+- [x] **Secret-handling + MySQL driver edge cases** (`53f9bea`) —
+  `_redact_params` recurses into list values; SSH `TimeoutError`
+  honors `sensitive`; `mysql_driver.query` decodes bytes cells instead
+  of rendering `b'...'` reprs; `mysql_defaults_content` quotes values
+  containing `#`/`;`/whitespace/quotes and writes control chars as
+  option-file escapes; `_extract_credentials` split into
+  regex/scanner variants for the complexity gate.
+
+#### Xenon after this pass
+
+`-b D -m B -a B` passes; `-b C` is now also clean — all blocks ≤ B.
+
+#### Still open / watch items
+
+- `remote mysql CLI` TSV fallback in `_run_target_mysql_query` splits on
+  `\t`/newlines — cell values containing those would misparse; only used
+  when the SSH-tunnel path fails, and queried fields are scalar.
+- `_select_rows_by_tokens` treats a whitespace-only selector as "all" —
+  surprising but consistent with "no filter".
+- `_build_replay_command` emits `uv run python main.py` — assumes the
+  source-checkout layout rather than the installed console script.
+- Subdomain `phpsettingid` unmapped → `0` (inherit), while main domains
+  fall back to the source id — asymmetric but harmless; revisit if a
+  target rejects `0`.
