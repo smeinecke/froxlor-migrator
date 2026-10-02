@@ -27,6 +27,7 @@ def make_args(**overrides: Any) -> SimpleNamespace:
         debug=False,
         non_interactive=False,
         yes=False,
+        all_customers=False,
         source_customer=None,
         target_customer=None,
         domain_only=False,
@@ -174,6 +175,7 @@ async def drive_to_plan(pilot) -> MigratorWizardApp:
     """Click through customer/mode/domains/resources/options to PlanScreen."""
     app = pilot.app
     await wait_for_screen(app, CustomerScreen, pilot)
+    app.screen.query_one("#customer-list").select(0)
     await pilot.click("#next")
     await wait_for_screen(app, ModeScreen, pilot)
     await pilot.click("#next")
@@ -235,6 +237,7 @@ class WizardFlowTests(unittest.TestCase):
             app = make_app(args={"domain_only": True, "target_customer": "bob"})
             async with app.run_test() as pilot:
                 await wait_for_screen(app, CustomerScreen, pilot)
+                app.screen.query_one("#customer-list").select(0)
                 await pilot.click("#next")
                 await wait_for_screen(app, ModeScreen, pilot)
                 # domain-only radio is pre-pressed via args; target select shows bob
@@ -275,6 +278,7 @@ class WizardFlowTests(unittest.TestCase):
             app = make_app()
             async with app.run_test() as pilot:
                 await wait_for_screen(app, CustomerScreen, pilot)
+                app.screen.query_one("#customer-list").select(0)
                 await pilot.click("#next")
                 await wait_for_screen(app, ModeScreen, pilot)
                 await pilot.click("#next")
@@ -323,6 +327,85 @@ class WizardFlowTests(unittest.TestCase):
                     await pilot.pause(0.02)
                 self.assertIn("api down", str(app.screen.query_one("#connect-error").render()))
                 self.assertTrue(app.screen.query_one("#retry", type(app.screen.query_one("#retry"))).display)
+
+        asyncio.run(scenario())
+
+    def test_batch_multi_select_runs_each_customer(self) -> None:
+        async def scenario() -> None:
+            executed: list[str] = []
+
+            class RecordingMigrator(DummyMigrator):
+                def execute(self, selection):
+                    executed.append(selection.customer["loginname"])
+                    return SimpleNamespace(target_customer_id=100 + len(executed), source_to_target_db={})
+
+            app = MigratorWizardApp(
+                config=make_config(),
+                args=make_args(),
+                clients=(DummyClient(), DummyClient()),
+                migrator_cls=RecordingMigrator,
+                runner_cls=DummyRunner,
+            )
+            async with app.run_test() as pilot:
+                await wait_for_screen(app, CustomerScreen, pilot)
+                widget = app.screen.query_one("#customer-list")
+                widget.select(0)
+                widget.select(1)
+                await pilot.click("#next")
+                await wait_for_screen(app, ModeScreen, pilot)
+                await pilot.click("#next")
+                # Batch skips Domains/Resources/Mappings -> straight to Options
+                await wait_for_screen(app, OptionsScreen, pilot)
+                await pilot.click("#next")
+                await wait_for_screen(app, PlanScreen, pilot)
+                self.assertTrue(app.state.is_batch)
+                self.assertIn("--source-customer", app.state.replay_command)
+                self.assertIn("1,2", app.state.replay_command)
+                await pilot.click("#start")
+                await wait_for_screen(app, ResultScreen, pilot)
+                table = app.screen.query_one("#batch-results")
+                self.assertEqual(table.row_count, 2)
+                self.assertEqual(len(app.state.batch_results), 2)
+                self.assertTrue(all(r["status"] == "ok" for r in app.state.batch_results))
+            self.assertEqual(executed, ["alice", "bob"])
+
+        asyncio.run(scenario())
+
+    def test_batch_continues_past_failed_customer(self) -> None:
+        async def scenario() -> None:
+            executed: list[str] = []
+
+            class FlakyMigrator(DummyMigrator):
+                def execute(self, selection):
+                    executed.append(selection.customer["loginname"])
+                    if selection.customer["loginname"] == "alice":
+                        raise RuntimeError("kaboom")
+                    return SimpleNamespace(target_customer_id=42, source_to_target_db={})
+
+            app = MigratorWizardApp(
+                config=make_config(),
+                args=make_args(),
+                clients=(DummyClient(), DummyClient()),
+                migrator_cls=FlakyMigrator,
+                runner_cls=DummyRunner,
+            )
+            async with app.run_test() as pilot:
+                await wait_for_screen(app, CustomerScreen, pilot)
+                widget = app.screen.query_one("#customer-list")
+                widget.select(0)
+                widget.select(1)
+                await pilot.click("#next")
+                await wait_for_screen(app, ModeScreen, pilot)
+                await pilot.click("#next")
+                await wait_for_screen(app, OptionsScreen, pilot)
+                await pilot.click("#next")
+                await wait_for_screen(app, PlanScreen, pilot)
+                await pilot.click("#start")
+                await wait_for_screen(app, ResultScreen, pilot)
+                statuses = {r["login"]: r["status"] for r in app.state.batch_results}
+                self.assertEqual(statuses["bob"], "ok")
+                self.assertTrue(str(statuses["alice"]).startswith("failed"))
+            self.assertEqual(executed, ["alice", "bob"])
 
         asyncio.run(scenario())
 

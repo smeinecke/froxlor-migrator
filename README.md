@@ -72,6 +72,16 @@ restores your previous selections. Add `--apply` to start in apply mode
 screen). Running without a TTY exits with an error — use `--non-interactive`
 for scripted runs.
 
+**Batch mode:** selecting multiple customers on the first screen (or passing a
+comma-separated `--source-customer` / `--all-customers` in non-interactive
+mode) runs a sequential batch — each customer is migrated independently with
+its own manifest. Per-resource selectors (`--domains`, `--databases`, …) apply
+tolerantly per customer: a token matching nothing in some customer is fine, a
+token matching *no* customer aborts before any writes. Customers that end up
+with zero selected domains are skipped. A failing customer doesn't stop the
+batch — the run ends with a per-customer status table and a non-zero exit if
+any failed.
+
 Fully non-interactive (no prompts/TUI):
 
 ```bash
@@ -135,7 +145,7 @@ This provides:
   - existing mailboxes: skip
 - PHP setting ids used by selected domains are mapped interactively to target PHP setting ids.
 - Domain IP/port assignments can be mapped interactively to target IP IDs.
-- Optional CLI selectors are available to automate migration without prompts (`--non-interactive`, `--source-customer`, `--domains`, `--databases`, `--mailboxes`, `--subdomains`, `--ftp-accounts`, `--php-map`, `--ip-map`, and `--yes`).
+- Optional CLI selectors are available to automate migration without prompts (`--non-interactive`, `--source-customer`, `--all-customers`, `--domains`, `--databases`, `--mailboxes`, `--subdomains`, `--ftp-accounts`, `--php-map`, `--ip-map`, and `--yes`).
 - `--php-map` and `--ip-map` support stable name mapping with `source=>target` pairs (PHP: `description|binary`, IP: `ip:port:ssl`).
 - SSL options and custom certificates are migrated via API where available.
 - DKIM enablement is migrated. If API migration leaves key mismatch, migrator performs a DB-level fallback update on target `panel_domains` and re-verifies key parity.

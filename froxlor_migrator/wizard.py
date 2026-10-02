@@ -45,6 +45,7 @@ from .config import AppConfig
 from .migrate import MigrationError, Migrator
 from .migration.types import MigrationContext, ResourceRow, Selection
 from .plan import (
+    build_batch_replay_command,
     build_clients,
     build_ip_mapping_tokens,
     build_php_mapping_tokens,
@@ -52,6 +53,7 @@ from .plan import (
     build_selection,
     collect_ip_mapping_candidates,
     collect_php_mapping_candidates,
+    customer_selector_token,
     customer_selector_values,
     customer_view,
     db_view,
@@ -60,16 +62,19 @@ from .plan import (
     domain_in_source_root,
     domain_view,
     fetch_domain_zones,
+    filter_mapping_to_rows,
     ftp_view,
     ip_aliases,
     ip_view,
     mail_view,
+    match_rows_by_tokens,
     narrow_subdomains,
     parse_mapping_arg,
     php_setting_aliases,
     php_settings_view,
     plan_rows,
     resolve_named_mapping,
+    select_customer_resources,
     select_rows_by_tokens,
     subdomain_view,
 )
@@ -97,6 +102,7 @@ class WizardState:
     target_ip_rows: list[dict] = field(default_factory=list)
 
     customer: ResourceRow | None = None
+    selected_customers: list[ResourceRow] = field(default_factory=list)
     resources: dict[str, list[dict]] = field(default_factory=dict)
     whole_customer: bool = True
     target_customer: ResourceRow | None = None
@@ -119,6 +125,11 @@ class WizardState:
     summary_rows: list[tuple[str, str]] = field(default_factory=list)
     context: MigrationContext | None = None
     runner: TransferRunner | None = None
+    batch_results: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def is_batch(self) -> bool:
+        return len(self.selected_customers) > 1
 
     def needs_mappings(self) -> bool:
         if self.php_map or self.ip_map:
@@ -198,6 +209,10 @@ class MigratorWizardApp(App):
         ]
         idx = order.index(type(screen)) + 1
         for cls in order[idx:]:
+            if self.state.is_batch and cls in (DomainsScreen, ResourcesScreen, MappingsScreen):
+                # Batch migrates every in-root domain + resource per customer
+                # with auto-resolved mappings — no per-customer pickers.
+                continue
             if cls is MappingsScreen and not self.state.needs_mappings():
                 continue
             self.push_screen(cls())
@@ -293,64 +308,52 @@ class CustomerScreen(WizardScreen):
     # Back would return to a stale ConnectScreen; quit and restart instead.
     block_back = True
 
-    _keys: list[str]
+    _views: list[dict]
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Step 1 — Source customer", id="title")
-        yield Label("Select the customer to migrate.", id="subtitle")
-        table = DataTable(cursor_type="row", id="customer-table")
-        table.add_columns("ID", "Login", "Name", "Email")
-        self._keys = []
-        for view in customer_view(self.state.customers):
-            key = str(view["id"])
-            self._keys.append(key)
-            table.add_row(str(view["id"]), str(view["login"]), str(view["name"]), str(view["email"]), key=key)
-        yield table
+        yield Label("Step 1 — Source customer(s)", id="title")
+        yield Label("Select customers to migrate — multiple selections run as a sequential batch.", id="subtitle")
+        yield SelectionList(id="customer-list")
         yield Footer()
         with Horizontal(classes="nav"):
             yield Button("Next", id="next", variant="primary")
             yield Button("Quit", id="quit")
 
     def on_mount(self) -> None:
-        token = self.state.args.source_customer
-        if not token:
-            return
-        try:
-            picked = select_rows_by_tokens(customer_view(self.state.customers), token, customer_selector_values, "source customer")
-        except ValueError as exc:
-            self.app.notify(str(exc), severity="error")
-            return
-        if len(picked) == 1:
-            wanted = str(picked[0]["id"])
-            if wanted in self._keys:
-                self.query_one("#customer-table", DataTable).move_cursor(row=self._keys.index(wanted))
+        state = self.state
+        self._views = customer_view(state.customers)
+        widget = self.query_one("#customer-list", SelectionList)
+        previous_ids = {as_int(pick(customer, "customerid", "id", default=0)) for customer in state.selected_customers}
+        if getattr(state.args, "all_customers", False) and not state.selected_customers:
+            previous_ids = {view["id"] for view in self._views}
+        elif state.args.source_customer and not state.selected_customers:
+            picked, _left = match_rows_by_tokens(self._views, state.args.source_customer, customer_selector_values)
+            previous_ids = {view["id"] for view in picked}
+        elif len(self._views) == 1 and not state.selected_customers:
+            previous_ids = {self._views[0]["id"]}
+        for idx, view in enumerate(self._views):
+            label = f"{view['login']} — {view['name'] or view['email'] or '?'}  (id {view['id']})"
+            widget.add_option(Item(label, value=idx, initial_state=view["id"] in previous_ids))
 
-    @on(DataTable.RowSelected, "#customer-table")
-    def _row_selected(self, event: DataTable.RowSelected) -> None:
-        self._commit(str(event.row_key.value))
+    def stash(self) -> None:
+        if getattr(self, "_views", None) is None:
+            return
+        widget = self.query_one("#customer-list", SelectionList)
+        self.state.selected_customers = [self._views[i]["_raw"] for i in widget.selected]
+        self.state.customer = self.state.selected_customers[0] if self.state.selected_customers else None
 
     @on(Button.Pressed, "#next")
     def _next(self) -> None:
-        table = self.query_one("#customer-table", DataTable)
-        if table.cursor_row >= len(self._keys):
-            self.app.notify("Pick a customer first", severity="warning")
+        self.stash()
+        if not self.state.selected_customers:
+            self.app.notify("Pick at least one customer", severity="warning")
             return
-        self._commit(self._keys[table.cursor_row])
+        self.advance()
 
     @on(Button.Pressed, "#quit")
     def _quit(self) -> None:
         self.app.exit()
-
-    def _commit(self, customer_id: str) -> None:
-        for view in customer_view(self.state.customers):
-            if str(view["id"]) == customer_id:
-                self.state.customer = view["_raw"]
-                break
-        if self.state.customer is None:
-            self.app.notify("Unknown customer selected", severity="error")
-            return
-        self.advance()
 
 
 class ModeScreen(WizardScreen):
@@ -786,12 +789,62 @@ class OptionsScreen(WizardScreen):
     def _next(self) -> None:
         state = self.state
         self.stash()
-        if state.includes.get("dns_zones", True):
+        if state.is_batch:
+            # Batch customers are discovered lazily in the run worker — zones
+            # are fetched per customer there.
+            self._build_batch_plan_and_continue()
+        elif state.includes.get("dns_zones", True):
             self.query_one("#next", Button).disabled = True
             self.run_worker(self._load_zones, thread=True, exit_on_error=False)
         else:
             state.domain_zones, state.zone_errors = [], []
             self._build_plan_and_continue()
+
+    def _build_batch_plan_and_continue(self) -> None:
+        state = self.state
+        inc = state.includes
+        state.selection = None
+        state.domain_zones, state.zone_errors = [], []
+        state.summary_rows = [
+            ("Customers", str(len(state.selected_customers))),
+            ("Mode", "whole-customer" if state.whole_customer else "domain-only"),
+        ]
+        if not state.whole_customer:
+            target_login = "new" if state.target_customer is None else str(pick(state.target_customer, "loginname", "login", default="?"))
+            state.summary_rows.append(("Target customer", target_login))
+        state.summary_rows += [
+            ("Scope", "all resources per customer"),
+            ("PHP/IP mappings", "auto (per customer)"),
+        ]
+        state.summary_rows += [(label.split(" (")[0], "yes" if inc.get(key, True) else "no") for key, label in _INCLUDE_OPTIONS]
+        state.summary_rows.append(("Dry-run", "yes" if state.dry_run else "no"))
+        state.replay_command = build_batch_replay_command(
+            config_path=state.args.config,
+            apply=not state.dry_run,
+            debug=state.args.debug,
+            migrate_whole_customer=state.whole_customer,
+            customer_tokens=[customer_selector_token(c) for c in state.selected_customers],
+            all_customers=False,
+            target_customer=state.target_customer,
+            domains_arg=state.args.domains,
+            subdomains_arg=state.args.subdomains,
+            databases_arg=state.args.databases,
+            mailboxes_arg=state.args.mailboxes,
+            ftp_accounts_arg=state.args.ftp_accounts,
+            php_map_arg=state.args.php_map,
+            ip_map_arg=state.args.ip_map,
+            include_files=inc["files"],
+            include_databases=inc["databases"],
+            include_mail=inc["mail"],
+            include_certificates=inc["certificates"],
+            include_domain_zones=inc["dns_zones"],
+            include_password_sync=inc["password_sync"],
+            include_forwarders=inc["forwarders"],
+            include_sender_aliases=inc["sender_aliases"],
+            skip_subdomains=not inc["subdomains"],
+            skip_database_name_validation=not inc["validate_db_names"],
+        )
+        self.app.push_screen(PlanScreen())
 
     def _load_zones(self) -> None:
         state = self.state
@@ -939,8 +992,12 @@ class OptionsScreen(WizardScreen):
 class PlanScreen(WizardScreen):
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Step 7 — Review & start", id="title")
+        title = f"Step 7 — Review batch ({len(self.state.selected_customers)} customers)" if self.state.is_batch else "Step 7 — Review & start"
+        if self.state.dry_run:
+            title += " (DRY RUN)"
+        yield Label(title, id="title")
         yield Label("Verify the plan, then start the migration.", id="subtitle")
+        yield DataTable(id="batch-table")
         yield DataTable(id="plan-table")
         for error in self.state.zone_errors:
             yield Static(f"Zone skipped: {error}", classes="note")
@@ -952,12 +1009,18 @@ class PlanScreen(WizardScreen):
             yield Button("Back", id="back")
 
     def on_mount(self) -> None:
+        state = self.state
+        batch_table = self.query_one("#batch-table", DataTable)
+        if state.is_batch:
+            batch_table.add_columns("ID", "Login", "Name", "Email")
+            for view in customer_view(state.selected_customers):
+                batch_table.add_row(str(view["id"]), str(view["login"]), str(view["name"]), str(view["email"]))
+        else:
+            batch_table.display = False
         table = self.query_one("#plan-table", DataTable)
         table.add_columns("Item", "Value")
-        for item, value in self.state.summary_rows:
+        for item, value in state.summary_rows:
             table.add_row(item, value)
-        if self.state.dry_run:
-            self.query_one("#title", Label).update("Step 7 — Review & start (DRY RUN)")
 
     @on(Button.Pressed, "#start")
     def _start(self) -> None:
@@ -984,25 +1047,148 @@ class RunScreen(WizardScreen):
 
     def on_mount(self) -> None:
         state = self.state
-        manifest_name = slugify(f"{pick(state.customer or {}, 'loginname', 'login', default='customer')}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
-        state.runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
         if state.source is None or state.target is None:
             self.query_one("#run-error", Static).update("Clients are not connected; restart the wizard.")
             self.block_back = False
             return
+        if state.is_batch:
+            self._worker = self.run_worker(self._execute_batch, thread=True, exit_on_error=False)
+            return
+        manifest_name = slugify(f"{pick(state.customer or {}, 'loginname', 'login', default='customer')}-{datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        state.runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
         migrator = self.app.migrator_cls(config=state.config, source=state.source, target=state.target, runner=state.runner)
         self._worker = self.run_worker(lambda: self._execute(migrator), thread=True, exit_on_error=False)
 
     def _execute(self, migrator: Migrator) -> MigrationContext:
-        def _progress(step: int, total: int, status: str) -> None:
-            self.app.call_from_thread(self._apply_progress, step, max(total, 1), status)
-            if self.state.runner is not None:
-                self.state.runner.progress_event(step, max(total, 1), status)
-
-        migrator.set_progress_callback(_progress)
+        migrator.set_progress_callback(self._progress_cb())
         if self.state.selection is None:
             raise MigrationError("no selection prepared")
         return migrator.execute(self.state.selection)
+
+    def _progress_cb(self, prefix: str = "") -> Callable[[int, int, str], None]:
+        def _progress(step: int, total: int, status: str) -> None:
+            self.app.call_from_thread(self._apply_progress, step, max(total, 1), f"{prefix}{status}")
+            if self.state.runner is not None:
+                self.state.runner.progress_event(step, max(total, 1), status)
+
+        return _progress
+
+    def _batch_note(self, line: str) -> None:
+        self.query_one("#log", RichLog).write(line)
+        self.query_one("#status-line", Static).update(line)
+
+    def _batch_maps(self, sel: dict[str, Any]) -> tuple[dict[int, int], dict[int, int]]:
+        """Per-customer auto maps plus any --php-map/--ip-map presets applied
+        tolerantly (tokens matching nothing in this customer are ignored)."""
+        state = self.state
+        php_arg = parse_mapping_arg(state.args.php_map, "--php-map")
+        ip_arg = parse_mapping_arg(state.args.ip_map, "--ip-map")
+        id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+
+        php_map: dict[int, int] = {}
+        try:
+            _ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(
+                sel["domains"] + sel["subdomains"], state.source_php_settings, state.target_php_settings
+            )
+            php_map = dict(default_map)
+            applicable, _absent = filter_mapping_to_rows(php_arg, source_rows, id_getter, php_setting_aliases)
+            if applicable:
+                php_map.update(
+                    resolve_named_mapping(applicable, source_rows, id_getter, php_setting_aliases, target_rows, id_getter, php_setting_aliases, "PHP mapping")
+                )
+        except ValueError:
+            pass
+
+        ip_map: dict[int, int] = {}
+        source_ip_rows = collect_ip_mapping_candidates(sel["domains"])
+        if source_ip_rows and state.target_ip_rows:
+            applicable, _absent = filter_mapping_to_rows(ip_arg, source_ip_rows, id_getter, ip_aliases)
+            if applicable:
+                ip_map = resolve_named_mapping(applicable, source_ip_rows, id_getter, ip_aliases, state.target_ip_rows, id_getter, ip_aliases, "IP mapping")
+        return php_map, ip_map
+
+    def _execute_batch(self) -> list[dict[str, Any]]:
+        """Plan + execute each selected customer sequentially, collecting
+        per-customer results. Planning happens lazily here so one customer's
+        API failure doesn't block the rest."""
+        state = self.state
+        inc = state.includes
+        selectors = {
+            "domains": state.args.domains,
+            "subdomains": state.args.subdomains,
+            "databases": state.args.databases,
+            "mailboxes": state.args.mailboxes,
+            "ftp_accounts": state.args.ftp_accounts,
+        }
+        results: list[dict[str, Any]] = []
+        total = len(state.selected_customers)
+        for index, customer in enumerate(state.selected_customers):
+            login = str(pick(customer, "loginname", "login", default="customer"))
+            prefix = f"[{index + 1}/{total}] {login} — "
+            self.app.call_from_thread(self._batch_note, f"━━━ {prefix.rstrip(' —')} planning…")
+            manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
+            runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
+            state.runner = runner
+            manifest = str(getattr(runner, "manifest_path", ""))
+            try:
+                if state.source is None or state.target is None:
+                    raise MigrationError("clients are not connected")
+                customer_id = as_int(pick(customer, "customerid", "id", default=0))
+                resources = discover_customer_resources(state.source, customer_id, login)
+                sel = select_customer_resources(
+                    resources,
+                    whole_customer=state.whole_customer,
+                    source_web_root=state.config.paths.source_web_root,
+                    selectors=selectors,
+                )
+                if not sel["domains"]:
+                    self.app.call_from_thread(self._batch_note, f"{prefix}skipped — no matching domains")
+                    results.append({"login": login, "status": "skipped", "context": None, "manifest": manifest})
+                    continue
+                if inc.get("dns_zones", True):
+                    sel["domain_zones"], zone_errors = fetch_domain_zones(state.source, sel["domain_names"])
+                    for error in zone_errors:
+                        self.app.call_from_thread(self._batch_note, f"{prefix}zone skipped — {error}")
+                else:
+                    sel["domain_zones"] = []
+                php_map, ip_map = self._batch_maps(sel)
+                selection = build_selection(
+                    customer=customer,
+                    target_customer=state.target_customer,
+                    domains=sel["domains"],
+                    subdomains=sel["subdomains"],
+                    databases=sel["databases"],
+                    mailboxes=sel["mailboxes"],
+                    email_forwarders=sel["forwarders"],
+                    email_senders=sel["sender_aliases"],
+                    ftp_accounts=sel["ftps"],
+                    ssh_keys=sel["ssh_keys"],
+                    data_dumps=sel["data_dumps"],
+                    dir_protections=sel["dir_protections"],
+                    dir_options=sel["dir_options"],
+                    domain_zones=sel["domain_zones"],
+                    include_files=inc["files"],
+                    include_databases=inc["databases"],
+                    include_mail=inc["mail"],
+                    include_subdomains=inc["subdomains"],
+                    validate_database_names=inc["validate_db_names"],
+                    php_setting_map=php_map,
+                    ip_mapping=ip_map,
+                    include_certificates=inc["certificates"],
+                    include_domain_zones=inc["dns_zones"],
+                    include_password_sync=inc["password_sync"],
+                    include_forwarders=inc["forwarders"],
+                    include_sender_aliases=inc["sender_aliases"],
+                )
+                migrator = self.app.migrator_cls(config=state.config, source=state.source, target=state.target, runner=runner)
+                migrator.set_progress_callback(self._progress_cb(prefix))
+                context = migrator.execute(selection)
+                results.append({"login": login, "status": "ok", "context": context, "manifest": manifest})
+                self.app.call_from_thread(self._batch_note, f"{prefix}done — target id {getattr(context, 'target_customer_id', '?')}")
+            except Exception as exc:  # noqa: BLE001 — one bad customer must not strand the rest of the batch
+                results.append({"login": login, "status": f"failed: {exc}", "context": None, "manifest": manifest})
+                self.app.call_from_thread(self._batch_note, f"{prefix}FAILED — {exc}")
+        return results
 
     def _apply_progress(self, step: int, total: int, status: str) -> None:
         self.query_one("#progress", ProgressBar).update(total=total, progress=step)
@@ -1014,7 +1200,10 @@ class RunScreen(WizardScreen):
         if event.worker is not self._worker:
             return
         if event.state == WorkerState.SUCCESS:
-            self.state.context = event.worker.result
+            if self.state.is_batch:
+                self.state.batch_results = event.worker.result or []
+            else:
+                self.state.context = event.worker.result
             self.app.push_screen(ResultScreen())
         elif event.state == WorkerState.ERROR:
             manifest = getattr(self.state.runner, "manifest_path", "")
@@ -1032,10 +1221,14 @@ class ResultScreen(WizardScreen):
     def compose(self) -> ComposeResult:
         yield Header()
         state = self.state
-        yield Label("Migration completed", id="title")
-        yield Static(f"Target customer id: {state.context.target_customer_id if state.context else 'n/a'}")
-        yield DataTable(id="db-map")
-        yield Static(f"Manifest: {getattr(state.runner, 'manifest_path', '')}")
+        if state.is_batch:
+            yield Label("Batch migration finished", id="title")
+            yield DataTable(id="batch-results")
+        else:
+            yield Label("Migration completed", id="title")
+            yield Static(f"Target customer id: {state.context.target_customer_id if state.context else 'n/a'}")
+            yield DataTable(id="db-map")
+            yield Static(f"Manifest: {getattr(state.runner, 'manifest_path', '')}")
         yield Label("Replay command:")
         yield TextArea(state.replay_command, read_only=True, id="replay")
         yield Label("Run `froxlor-migrator-verify` to check target parity.", id="subtitle")
@@ -1045,8 +1238,22 @@ class ResultScreen(WizardScreen):
             yield Button("Quit", id="quit")
 
     def on_mount(self) -> None:
+        state = self.state
+        if state.is_batch:
+            table = self.query_one("#batch-results", DataTable)
+            table.add_columns("Customer", "Status", "Target id", "Manifest")
+            failures = 0
+            for result in state.batch_results:
+                context = result.get("context")
+                target_id = str(getattr(context, "target_customer_id", "") or "") if context else ""
+                table.add_row(str(result["login"]), str(result["status"]), target_id, str(result["manifest"]))
+                if result["status"] == "failed" or str(result["status"]).startswith("failed"):
+                    failures += 1
+            if failures:
+                self.query_one("#title", Label).update(f"Batch finished — {failures} customer(s) failed")
+            return
         table = self.query_one("#db-map", DataTable)
-        db_map = self.state.context.source_to_target_db if self.state.context else {}
+        db_map = state.context.source_to_target_db if state.context else {}
         if not db_map:
             table.display = False
             return
@@ -1058,6 +1265,7 @@ class ResultScreen(WizardScreen):
     def _again(self) -> None:
         state = self.state
         state.customer = None
+        state.selected_customers = []
         state.resources = {}
         state.domains = state.subdomains = state.databases = state.mailboxes = state.ftps = None
         state.php_map = {}
@@ -1065,6 +1273,7 @@ class ResultScreen(WizardScreen):
         state.selection = None
         state.context = None
         state.runner = None
+        state.batch_results = []
         state.domain_zones = []
         state.zone_errors = []
         # Pop back to the still-suspended CustomerScreen; clients stay connected.
