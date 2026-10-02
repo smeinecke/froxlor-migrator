@@ -54,9 +54,8 @@ def extract_sql_credentials(content: str) -> dict[str, str] | None:
     return _extract_credentials(content, "sql")
 
 
-def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
-    pairs: dict[str, str] = {}
-
+def _extract_credentials_via_regex(content: str, section: str) -> dict[str, str]:
+    """Direct ``$sql[...]`` / ``$sql_root[i][...]`` key extraction."""
     # The value body may contain the *other* quote type unescaped (e.g. a
     # single-quoted password containing a double quote), so the closing quote
     # must match the opening one — not either.
@@ -69,32 +68,42 @@ def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
             content,
         ):
             indexed_pairs.setdefault(index, {})[key] = _php_unescape(raw_value, double_quoted=(quote == '"'))
-        if indexed_pairs:
-            candidates = [item for item in indexed_pairs.values() if item.get("user", "").strip()]
-            if candidates:
-                pairs = max(candidates, key=_credential_score)
-    else:
-        for key, quote, raw_value in re.findall(
-            rf"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
-            content,
-        ):
-            pairs[key] = _php_unescape(raw_value, double_quoted=(quote == '"'))
+        candidates = [item for item in indexed_pairs.values() if item.get("user", "").strip()]
+        if candidates:
+            return max(candidates, key=_credential_score)
+        return {}
 
-    if not pairs:
-        body = _extract_php_array_body(content, section)
-        if body:
-            if section == "sql_root":
-                # New Froxlor format stores root entries under index keys (e.g. '0' => [...]).
-                root_entry = _extract_first_sql_root_entry(body)
-                if root_entry:
-                    body = root_entry
-            for key in ("host", "port", "socket", "user", "password"):
-                value = _extract_php_array_value(body, key)
-                if value is not None:
-                    pairs[key] = value
-        elif section == "sql_root":
-            # Keep legacy best-effort fallback for sql_root only.
-            pairs = {key: _php_unescape(raw_value) for key, raw_value in re.findall(r"['\"]([A-Za-z0-9_]+)['\"]\s*=>\s*['\"]((?:\\.|[^'\"])*)['\"]", content)}
+    pairs: dict[str, str] = {}
+    for key, quote, raw_value in re.findall(
+        rf"\$sql\s*\[\s*['\"]([A-Za-z0-9_]+)['\"]\s*\]\s*=\s*{value_literal}\s*;",
+        content,
+    ):
+        pairs[key] = _php_unescape(raw_value, double_quoted=(quote == '"'))
+    return pairs
+
+
+def _extract_credentials_via_scanner(content: str, section: str) -> dict[str, str]:
+    body = _extract_php_array_body(content, section)
+    if not body:
+        if section != "sql_root":
+            return {}
+        # Keep legacy best-effort fallback for sql_root only.
+        return {key: _php_unescape(raw_value) for key, raw_value in re.findall(r"['\"]([A-Za-z0-9_]+)['\"]\s*=>\s*['\"]((?:\\.|[^'\"])*)['\"]", content)}
+    if section == "sql_root":
+        # New Froxlor format stores root entries under index keys (e.g. '0' => [...]).
+        root_entry = _extract_first_sql_root_entry(body)
+        if root_entry:
+            body = root_entry
+    pairs: dict[str, str] = {}
+    for key in ("host", "port", "socket", "user", "password"):
+        value = _extract_php_array_value(body, key)
+        if value is not None:
+            pairs[key] = value
+    return pairs
+
+
+def _extract_credentials(content: str, section: str) -> dict[str, str] | None:
+    pairs = _extract_credentials_via_regex(content, section) or _extract_credentials_via_scanner(content, section)
 
     user = pairs.get("user", "").strip()
     password = pairs.get("password", "")
@@ -244,10 +253,21 @@ def connect_kwargs_from_credentials(creds: dict[str, str]) -> dict[str, Any]:
     return kwargs
 
 
+def _defaults_value(value: str) -> str:
+    # MySQL option files treat #/; as comment starts and strip surrounding
+    # whitespace — quote values that need it. Inside double quotes the
+    # grammar interprets \\, \" and the \n/\r/\t escapes, so real control
+    # characters must be written as those escapes.
+    if re.search(r"[#;\s\"'\\]", value):
+        escaped = value.replace("\\", "\\\\").replace("\n", "\\n").replace("\r", "\\r").replace("\t", "\\t").replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
 def mysql_defaults_content(creds: dict[str, str]) -> str:
     lines = ["[client]"]
     for key in ("user", "password", "host", "port", "socket"):
         value = creds.get(key, "")
         if value:
-            lines.append(f"{key}={value}")
+            lines.append(f"{key}={_defaults_value(value)}")
     return "\n".join(lines) + "\n"

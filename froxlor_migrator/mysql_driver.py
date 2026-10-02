@@ -21,8 +21,18 @@ def query(connect_kwargs: dict[str, Any], database: str, sql: str) -> list[list[
             rows = cursor.fetchall()
     result: list[list[str]] = []
     for row in rows:
-        result.append(["" if value is None else str(value) for value in row])
+        result.append([_cell_text(value) for value in row])
     return result
+
+
+def _cell_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (bytes, bytearray)):
+        # VARBINARY/BLOB columns arrive as bytes; str() would render the
+        # "b'...'" repr and corrupt the value.
+        return bytes(value).decode("utf-8", "replace")
+    return str(value)
 
 
 def execute(connect_kwargs: dict[str, Any], database: str, sql: str) -> None:

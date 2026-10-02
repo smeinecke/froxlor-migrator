@@ -110,7 +110,7 @@ class SshDriver:
                 break
             if deadline is not None and time.monotonic() > deadline:
                 channel.close()
-                raise TimeoutError(f"SSH command timed out after {timeout}s: {command[:200]}")
+                raise TimeoutError(f"SSH command timed out after {timeout}s: {'[redacted]' if sensitive else command[:200]}")
             time.sleep(0.01)
         code = channel.recv_exit_status()
         channel.close()

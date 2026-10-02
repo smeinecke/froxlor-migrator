@@ -38,6 +38,8 @@ def _redact_params(params: Any) -> Any:
                 redacted[key] = "***"
             elif isinstance(value, dict):
                 redacted[key] = _redact_params(value)
+            elif isinstance(value, list):
+                redacted[key] = [_redact_params(item) if isinstance(item, dict) else item for item in value]
             else:
                 redacted[key] = value
         return redacted
