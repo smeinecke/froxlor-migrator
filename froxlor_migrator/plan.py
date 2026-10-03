@@ -10,12 +10,13 @@ from __future__ import annotations
 
 import shlex
 from collections.abc import Callable, Iterable
+from datetime import datetime
 from typing import Any
 
 from .api import FroxlorApiError, FroxlorClient
 from .config import AppConfig
 from .migration.types import ResourceRow, Selection
-from .util import as_int, domain_name, ftp_username, mailbox_address, pick, resolve_subdomain_parts
+from .util import as_int, domain_name, ftp_username, mailbox_address, pick, resolve_subdomain_parts, slugify
 
 
 def split_csv(raw: str | None) -> list[str]:
@@ -274,6 +275,21 @@ def select_customers_by_tokens(
     return [row for row in rows if id(row) in selected_ids]
 
 
+SELECTOR_LABELS: dict[str, str] = {
+    "domains": "domain",
+    "subdomains": "subdomain",
+    "databases": "database",
+    "mailboxes": "mailbox",
+    "ftp_accounts": "FTP account",
+}
+
+
+def resource_selector_args(args: Any) -> dict[str, str | None]:
+    """Raw CSV selectors from parsed CLI args, keyed for
+    ``select_customer_resources``/``unmatched_tokens``."""
+    return {key: getattr(args, key, None) for key in SELECTOR_LABELS}
+
+
 def unmatched_tokens(
     selectors: dict[str, str | None],
     matched: dict[str, set[str]],
@@ -283,16 +299,15 @@ def unmatched_tokens(
     """Selector/mapping tokens that matched no customer at all.
 
     Batch selection tolerates per-customer misses; a token matching nothing
-    anywhere is almost always a typo. ``selectors`` maps the same labels used
-    by ``select_customer_resources`` (domain, subdomain, database, mailbox,
-    FTP account) to their raw CSV strings.
+    anywhere is almost always a typo. ``selectors`` is keyed like
+    ``resource_selector_args`` (domains, subdomains, …).
     """
     missing: list[str] = []
-    for label, raw in selectors.items():
+    for key, raw in selectors.items():
         provided = {token.lower() for token in split_csv(raw)} - {"all", "none"}
-        left = provided - matched.get(label, set())
+        left = provided - matched.get(SELECTOR_LABELS.get(key, key), set())
         if left:
-            missing.append(f"{label}: {', '.join(sorted(left))}")
+            missing.append(f"{SELECTOR_LABELS.get(key, key)}: {', '.join(sorted(left))}")
     for label, raw_map in (("PHP mapping", php_mapping), ("IP mapping", ip_mapping)):
         left = set(raw_map or {}) - matched.get(label, set())
         if left:
@@ -313,6 +328,16 @@ def customer_selector_token(customer: dict[str, Any]) -> str:
 
 def customer_selector_values(row: dict) -> list[str]:
     return [str(row.get("id", "")), str(row.get("login", "")), str(row.get("name", "")), str(row.get("email", ""))]
+
+
+def customer_login(customer: dict[str, Any]) -> str:
+    return str(pick(customer, "loginname", "login", default="customer"))
+
+
+def batch_manifest_name(login: str, index: int) -> str:
+    """Unique manifest per batch member — the index guards collisions when
+    two customers finish planning within the same second."""
+    return slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
 
 
 def names_or_none(names: Iterable[str]) -> str:
@@ -798,6 +823,58 @@ def collect_ip_mapping_candidates(selected_domains: list[dict]) -> list[dict]:
     return [source_ips[ip_id] for ip_id in sorted(source_ips)]
 
 
+def resolve_php_map(
+    selected_rows: list[dict],
+    source_settings: list[dict],
+    target_settings: list[dict],
+    raw_mapping: dict[str, str],
+    matched: dict[str, set[str]] | None = None,
+) -> tuple[dict[int, int], list[dict], list[dict]]:
+    """Resolve a --php-map preset for one customer's selected domains+subdomains.
+
+    Returns ``(map, source_rows, target_rows)``; unmapped source ids fall back
+    to the same-id/first-default rule. When ``matched`` is given the preset is
+    applied tolerantly (tokens absent here are ignored and recorded), which is
+    the batch semantic. Raises ``ValueError`` on unknown/ambiguous target
+    tokens.
+    """
+    source_ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(selected_rows, source_settings, target_settings)
+    if not source_ids:
+        return {}, source_rows, target_rows
+    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+    raw = dict(raw_mapping)
+    if matched is not None:
+        raw, _absent = filter_mapping_to_rows(raw, source_rows, id_getter, php_setting_aliases)
+        matched.setdefault("PHP mapping", set()).update(raw)
+    mapping = resolve_named_mapping(raw, source_rows, id_getter, php_setting_aliases, target_rows, id_getter, php_setting_aliases, "PHP mapping")
+    for source_id in source_ids:
+        mapping.setdefault(source_id, default_map[source_id])
+    return mapping, source_rows, target_rows
+
+
+def resolve_ip_map(
+    source_ip_rows: list[dict],
+    target_ip_rows: list[dict],
+    raw_mapping: dict[str, str],
+    matched: dict[str, set[str]] | None = None,
+) -> dict[int, int]:
+    """Resolve an --ip-map preset against this customer's bound source IPs.
+
+    Applicable tokens are recorded in ``matched`` even when the target has no
+    IPs — matched means "the token exists on this customer's source side".
+    Raises ``ValueError`` on unknown/ambiguous tokens."""
+    if not source_ip_rows:
+        return {}
+    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
+    raw = dict(raw_mapping)
+    if matched is not None:
+        raw, _absent = filter_mapping_to_rows(raw, source_ip_rows, id_getter, ip_aliases)
+        matched.setdefault("IP mapping", set()).update(raw)
+    if not target_ip_rows or not raw:
+        return {}
+    return resolve_named_mapping(raw, source_ip_rows, id_getter, ip_aliases, target_ip_rows, id_getter, ip_aliases, "IP mapping")
+
+
 def build_selection(
     *,
     customer: ResourceRow,
@@ -854,6 +931,51 @@ def build_selection(
         include_password_sync=include_password_sync,
         include_forwarders=include_forwarders,
         include_sender_aliases=include_sender_aliases,
+    )
+
+
+def build_customer_selection(
+    *,
+    customer: ResourceRow,
+    target_customer: ResourceRow | None,
+    sel: dict[str, Any],
+    includes: dict[str, bool],
+    php_setting_map: dict[int, int],
+    ip_mapping: dict[int, int],
+) -> Selection:
+    """Assemble a ``Selection`` from a ``select_customer_resources`` result.
+
+    ``includes`` uses the canonical flag keys (files, databases, mail,
+    subdomains, certificates, domain_zones, password_sync, forwarders,
+    sender_aliases, validate_db_names) — the same keys both front-ends store.
+    """
+    return build_selection(
+        customer=customer,
+        target_customer=target_customer,
+        domains=sel["domains"],
+        subdomains=sel["subdomains"],
+        databases=sel["databases"],
+        mailboxes=sel["mailboxes"],
+        email_forwarders=sel["forwarders"],
+        email_senders=sel["sender_aliases"],
+        ftp_accounts=sel["ftps"],
+        ssh_keys=sel["ssh_keys"],
+        data_dumps=sel["data_dumps"],
+        dir_protections=sel["dir_protections"],
+        dir_options=sel["dir_options"],
+        domain_zones=sel["domain_zones"],
+        include_files=includes["files"],
+        include_databases=includes["databases"],
+        include_mail=includes["mail"],
+        include_subdomains=includes["subdomains"],
+        validate_database_names=includes["validate_db_names"],
+        php_setting_map=php_setting_map,
+        ip_mapping=ip_mapping,
+        include_certificates=includes["certificates"],
+        include_domain_zones=includes["domain_zones"],
+        include_password_sync=includes["password_sync"],
+        include_forwarders=includes["forwarders"],
+        include_sender_aliases=includes["sender_aliases"],
     )
 
 

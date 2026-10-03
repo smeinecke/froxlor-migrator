@@ -4,7 +4,6 @@ import argparse
 import logging
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Any
 
 from rich.console import Console
@@ -15,34 +14,34 @@ from .api import FroxlorApiError, FroxlorClient
 from .config import load_config
 from .migrate import MigrationError, Migrator, Selection
 from .plan import (
+    batch_manifest_name,
     batch_summary_row,
     build_batch_replay_command,
     build_clients,
+    build_customer_selection,
     build_ip_mapping_tokens,
     build_php_mapping_tokens,
     build_replay_command,
-    build_selection,
     collect_ip_mapping_candidates,
-    collect_php_mapping_candidates,
+    customer_login,
     customer_selector_token,
     customer_selector_values,
     customer_view,
     discover_customer_resources,
     fetch_domain_zones,
-    filter_mapping_to_rows,
-    ip_aliases,
     ip_view,
     parse_mapping_arg,
-    php_setting_aliases,
     plan_rows,
-    resolve_named_mapping,
+    resolve_ip_map,
+    resolve_php_map,
+    resource_selector_args,
     select_customer_resources,
     select_customers_by_tokens,
     select_rows_by_tokens,
     unmatched_tokens,
 )
 from .transfer import TransferError, TransferRunner
-from .util import as_int, pick, slugify
+from .util import as_int, pick
 
 console = Console()
 
@@ -183,13 +182,7 @@ def _resolve_target_customer(args: argparse.Namespace, target: FroxlorClient) ->
 
 
 def _resource_selectors(args: argparse.Namespace) -> dict[str, str | None]:
-    return {
-        "domains": args.domains,
-        "subdomains": args.subdomains,
-        "databases": args.databases,
-        "mailboxes": args.mailboxes,
-        "ftp_accounts": args.ftp_accounts,
-    }
+    return resource_selector_args(args)
 
 
 def _build_ip_map(
@@ -202,30 +195,11 @@ def _build_ip_map(
     if not source_ip_rows:
         return {}, [], []
 
-    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
-    raw_mapping = preset_mapping or {}
-    if matched is not None:
-        # Record applicability before the no-target-IPs early return — tokens
-        # that match source rows are "matched" even when nothing can apply.
-        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_ip_rows, id_getter, ip_aliases)
-        matched.setdefault("IP mapping", set()).update(raw_mapping)
-
-    target_ips = target.listing("IpsAndPorts.listing")
-    target_ip_rows = ip_view(target_ips)
+    target_ip_rows = ip_view(target.listing("IpsAndPorts.listing"))
     if not target_ip_rows:
         console.print("[yellow]No target IPs available via API, using Froxlor defaults.[/yellow]")
-        return {}, source_ip_rows, []
     try:
-        mapping = resolve_named_mapping(
-            raw_mapping=raw_mapping,
-            source_rows=source_ip_rows,
-            source_value_getter=id_getter,
-            source_alias_getter=ip_aliases,
-            target_rows=target_ip_rows,
-            target_value_getter=id_getter,
-            target_alias_getter=ip_aliases,
-            mapping_label="IP mapping",
-        )
+        mapping = resolve_ip_map(source_ip_rows, target_ip_rows, preset_mapping or {}, matched)
     except ValueError as exc:
         console.print(f"[red]Mapping/selection error:[/red] {exc}")
         raise SystemExit(1) from exc
@@ -240,32 +214,11 @@ def _build_php_setting_map(
     preset_mapping: dict[str, str] | None = None,
     matched: dict[str, set[str]] | None = None,
 ) -> tuple[dict[int, int], list[dict]]:
-    source_ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(selected_domains, source_settings, target_settings)
-    if not source_ids:
-        return {}, []
-    id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
-    raw_mapping = preset_mapping or {}
-    if matched is not None:
-        raw_mapping, _absent = filter_mapping_to_rows(raw_mapping, source_rows, id_getter, php_setting_aliases)
-        matched.setdefault("PHP mapping", set()).update(raw_mapping)
     try:
-        mapping = resolve_named_mapping(
-            raw_mapping=raw_mapping,
-            source_rows=source_rows,
-            source_value_getter=id_getter,
-            source_alias_getter=php_setting_aliases,
-            target_rows=target_rows,
-            target_value_getter=id_getter,
-            target_alias_getter=php_setting_aliases,
-            mapping_label="PHP mapping",
-        )
+        mapping, source_rows, _target_rows = resolve_php_map(selected_domains, source_settings, target_settings, preset_mapping or {}, matched)
     except ValueError as exc:
         console.print(f"[red]Mapping/selection error:[/red] {exc}")
         raise SystemExit(1) from exc
-
-    for source_id in source_ids:
-        if source_id not in mapping:
-            mapping[source_id] = default_map[source_id]
     return mapping, source_rows
 
 
@@ -377,7 +330,7 @@ def _plan_customer(
     batch (tolerant) mode — in strict mode an empty/unmatched selection raises
     via SystemExit instead.
     """
-    login = str(pick(customer, "loginname", "login", default=""))
+    login = customer_login(customer)
     customer_id = as_int(pick(customer, "customerid", "id", default=0))
 
     try:
@@ -429,33 +382,13 @@ def _plan_customer(
         console.print(f"[red]IP discovery/mapping error for {login}:[/red] {exc}")
         raise SystemExit(1) from exc
 
-    selection = build_selection(
+    selection = build_customer_selection(
         customer=customer,
         target_customer=target_customer,
-        domains=sel["domains"],
-        subdomains=sel["subdomains"],
-        databases=sel["databases"],
-        mailboxes=sel["mailboxes"],
-        email_forwarders=sel["forwarders"],
-        email_senders=sel["sender_aliases"],
-        ftp_accounts=sel["ftps"],
-        ssh_keys=sel["ssh_keys"],
-        data_dumps=sel["data_dumps"],
-        dir_protections=sel["dir_protections"],
-        dir_options=sel["dir_options"],
-        domain_zones=sel["domain_zones"],
-        include_files=includes["files"],
-        include_databases=includes["databases"],
-        include_mail=includes["mail"],
-        include_subdomains=includes["subdomains"],
-        validate_database_names=includes["validate_db_names"],
+        sel=sel,
+        includes=includes,
         php_setting_map=php_setting_map,
         ip_mapping=ip_mapping,
-        include_certificates=includes["certificates"],
-        include_domain_zones=includes["domain_zones"],
-        include_password_sync=includes["password_sync"],
-        include_forwarders=includes["forwarders"],
-        include_sender_aliases=includes["sender_aliases"],
     )
     return _PlannedCustomer(
         customer=customer,
@@ -473,13 +406,7 @@ def _check_unmatched_tokens(args: argparse.Namespace, matched: dict[str, set[str
     """Fail the batch if a selector/mapping token matched no customer at all —
     per-customer misses are fine (tolerant), a global miss is a typo."""
     missing_parts = unmatched_tokens(
-        {
-            "domain": args.domains,
-            "subdomain": args.subdomains,
-            "database": args.databases,
-            "mailbox": args.mailboxes,
-            "FTP account": args.ftp_accounts,
-        },
+        _resource_selectors(args),
         matched,
         php_mapping=php_mapping_arg,
         ip_mapping=ip_mapping_arg,
@@ -525,7 +452,7 @@ def _plan_all_customers(
     matched: dict[str, set[str]] | None = {} if batch else None
     planned: list[_PlannedCustomer] = []
     for customer in selected_customers:
-        login = str(pick(customer, "loginname", "login", default=""))
+        login = customer_login(customer)
         if batch:
             console.print(f"[bold]Planning {login}…[/bold]")
         item = _plan_customer(
@@ -678,10 +605,10 @@ def _execute_planned(
 ) -> None:
     results: list[tuple[str, str, Any, str]] = []  # (login, status, context, manifest)
     for index, item in enumerate(planned):
-        login = str(pick(item.customer, "loginname", "login", default="customer"))
+        login = customer_login(item.customer)
         if batch:
             console.print(f"[bold cyan]━━━ [{index + 1}/{len(planned)}] {login} ━━━[/bold cyan]")
-        manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
+        manifest_name = batch_manifest_name(login, index)
         runner = TransferRunner(config=config, dry_run=dry_run, manifest_name=manifest_name, debug=args.debug)
         migrator = Migrator(config=config, source=source, target=target, runner=runner)
         try:

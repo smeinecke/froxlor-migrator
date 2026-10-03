@@ -82,37 +82,20 @@ class DummyClient:
         return []
 
 
+def make_config() -> SimpleNamespace:
+    return SimpleNamespace(
+        source=SimpleNamespace(api_url="", api_key="", api_secret="", timeout_seconds=30),
+        target=SimpleNamespace(api_url="", api_key="", api_secret="", timeout_seconds=30),
+        paths=SimpleNamespace(source_web_root="/var/www", source_transfer_root="/var/www", target_web_root="/var/www"),
+        behavior=SimpleNamespace(dry_run_default=True),
+        commands=SimpleNamespace(ssh="ssh"),
+    )
+
+
 class RunAppTests(unittest.TestCase):
     def test_run_app_non_interactive_completes(self) -> None:
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", DummyMigrator),
@@ -140,35 +123,8 @@ class RunAppTests(unittest.TestCase):
             def execute(self, selection):
                 raise tui_module.MigrationError("boom")
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", FailingMigrator),
@@ -200,35 +156,8 @@ class RunAppTests(unittest.TestCase):
                 executed.append(selection.customer["loginname"])
                 return SimpleNamespace(target_customer_id=100 + len(executed), source_to_target_db={})
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", RecordingMigrator),
@@ -253,35 +182,8 @@ class RunAppTests(unittest.TestCase):
                     raise tui_module.MigrationError("boom")
                 return SimpleNamespace(target_customer_id=42, source_to_target_db={})
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", FlakyMigrator),
@@ -315,35 +217,8 @@ class RunAppTests(unittest.TestCase):
                 executed.append(selection.customer["loginname"])
                 return SimpleNamespace(target_customer_id=1, source_to_target_db={})
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", RecordingMigrator),
@@ -385,35 +260,8 @@ class RunAppTests(unittest.TestCase):
                 executed.append(selection.customer["loginname"])
                 return SimpleNamespace(target_customer_id=1, source_to_target_db={})
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", CollisionClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", RecordingMigrator),
@@ -440,35 +288,8 @@ class RunAppTests(unittest.TestCase):
                 executed.append(selection.customer["loginname"])
                 return SimpleNamespace(target_customer_id=1, source_to_target_db={})
 
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch("froxlor_migrator.plan.FroxlorClient", DummyClient),
             patch.object(tui_module, "TransferRunner", DummyRunner),
             patch.object(tui_module, "Migrator", RecordingMigrator),
@@ -507,35 +328,8 @@ class RunAppTests(unittest.TestCase):
         self.assertEqual(matched["IP mapping"], {"1.2.3.4:80"})
 
     def test_run_app_interactive_requires_tty(self) -> None:
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
         with (
-            patch.object(tui_module, "load_config", return_value=DummyConfig()),
+            patch.object(tui_module, "load_config", return_value=make_config()),
             patch.object(sys.stdin, "isatty", return_value=False),
             patch.object(sys.stdout, "isatty", return_value=False),
         ):
@@ -549,34 +343,7 @@ class RunAppTests(unittest.TestCase):
                 sys.argv = sys_argv
 
     def test_run_app_unresolvable_customer_exits_nonzero(self) -> None:
-        class DummyConfig:
-            class Api:
-                api_url = ""
-                api_key = ""
-                api_secret = ""
-                timeout_seconds = 30
-
-            source = Api()
-            target = Api()
-
-            class Paths:
-                source_web_root = "/var/www"
-                source_transfer_root = "/var/www"
-                target_web_root = "/var/www"
-
-            paths = Paths()
-
-            class Behavior:
-                dry_run_default = True
-
-            behavior = Behavior()
-
-            class Commands:
-                ssh = "ssh"
-
-            commands = Commands()
-
-        with patch.object(tui_module, "load_config", return_value=DummyConfig()), patch("froxlor_migrator.plan.FroxlorClient", DummyClient):
+        with patch.object(tui_module, "load_config", return_value=make_config()), patch("froxlor_migrator.plan.FroxlorClient", DummyClient):
             sys_argv = sys.argv
             try:
                 sys.argv = [

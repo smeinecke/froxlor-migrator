@@ -45,14 +45,17 @@ from .config import AppConfig
 from .migrate import MigrationError, Migrator
 from .migration.types import MigrationContext, ResourceRow, Selection
 from .plan import (
+    batch_manifest_name,
     build_batch_replay_command,
     build_clients,
+    build_customer_selection,
     build_ip_mapping_tokens,
     build_php_mapping_tokens,
     build_replay_command,
     build_selection,
     collect_ip_mapping_candidates,
     collect_php_mapping_candidates,
+    customer_login,
     customer_selector_token,
     customer_selector_values,
     customer_view,
@@ -62,7 +65,6 @@ from .plan import (
     domain_in_source_root,
     domain_view,
     fetch_domain_zones,
-    filter_mapping_to_rows,
     ftp_view,
     ip_aliases,
     ip_view,
@@ -73,7 +75,10 @@ from .plan import (
     php_setting_aliases,
     php_settings_view,
     plan_rows,
+    resolve_ip_map,
     resolve_named_mapping,
+    resolve_php_map,
+    resource_selector_args,
     select_customer_resources,
     select_rows_by_tokens,
     subdomain_view,
@@ -742,7 +747,7 @@ _INCLUDE_OPTIONS = [
     ("mail", "Transfer mailbox content via doveadm backup"),
     ("subdomains", "Create/update subdomains on target"),
     ("certificates", "Migrate TLS certificates"),
-    ("dns_zones", "Migrate custom DNS zone records"),
+    ("domain_zones", "Migrate custom DNS zone records"),
     ("password_sync", "Sync password hashes (customer, FTP, mailbox, htpasswd, DB logins)"),
     ("forwarders", "Migrate mail forwarders"),
     ("sender_aliases", "Migrate sender aliases"),
@@ -777,7 +782,7 @@ class OptionsScreen(WizardScreen):
             "mail": _yes_no(args.include_mail),
             "subdomains": not args.skip_subdomains,
             "certificates": not args.skip_certificates,
-            "dns_zones": not args.skip_dns_zones,
+            "domain_zones": not args.skip_dns_zones,
             "password_sync": not args.skip_password_sync,
             "forwarders": not args.skip_forwarders,
             "sender_aliases": not args.skip_sender_aliases,
@@ -797,7 +802,7 @@ class OptionsScreen(WizardScreen):
             # Batch customers are discovered lazily in the run worker — zones
             # are fetched per customer there.
             self._build_batch_plan_and_continue()
-        elif state.includes.get("dns_zones", True):
+        elif state.includes.get("domain_zones", True):
             self.query_one("#next", Button).disabled = True
             self.run_worker(self._load_zones, thread=True, exit_on_error=False)
         else:
@@ -841,7 +846,7 @@ class OptionsScreen(WizardScreen):
             include_databases=inc["databases"],
             include_mail=inc["mail"],
             include_certificates=inc["certificates"],
-            include_domain_zones=inc["dns_zones"],
+            include_domain_zones=inc["domain_zones"],
             include_password_sync=inc["password_sync"],
             include_forwarders=inc["forwarders"],
             include_sender_aliases=inc["sender_aliases"],
@@ -912,7 +917,7 @@ class OptionsScreen(WizardScreen):
             php_setting_map=state.php_map,
             ip_mapping=state.ip_map,
             include_certificates=inc["certificates"],
-            include_domain_zones=inc["dns_zones"],
+            include_domain_zones=inc["domain_zones"],
             include_password_sync=inc["password_sync"],
             include_forwarders=inc["forwarders"],
             include_sender_aliases=inc["sender_aliases"],
@@ -947,7 +952,7 @@ class OptionsScreen(WizardScreen):
             include_databases=inc["databases"],
             include_mail=inc["mail"],
             include_certificates=inc["certificates"],
-            include_domain_zones=inc["dns_zones"],
+            include_domain_zones=inc["domain_zones"],
             include_password_sync=inc["password_sync"],
             include_forwarders=inc["forwarders"],
             include_sender_aliases=inc["sender_aliases"],
@@ -978,7 +983,7 @@ class OptionsScreen(WizardScreen):
             include_databases=inc["databases"],
             include_mail=inc["mail"],
             include_certificates=inc["certificates"],
-            include_domain_zones=inc["dns_zones"],
+            include_domain_zones=inc["domain_zones"],
             include_password_sync=inc["password_sync"],
             include_forwarders=inc["forwarders"],
             include_sender_aliases=inc["sender_aliases"],
@@ -1091,27 +1096,8 @@ class RunScreen(WizardScreen):
         """Per-customer auto maps plus any --php-map/--ip-map presets applied
         tolerantly (tokens matching nothing in this customer are ignored)."""
         state = self.state
-        id_getter = lambda row: as_int(pick(row, "id", default=0))  # noqa: E731
-
-        php_map: dict[int, int] = {}
-        _ids, source_rows, target_rows, default_map = collect_php_mapping_candidates(
-            sel["domains"] + sel["subdomains"], state.source_php_settings, state.target_php_settings
-        )
-        php_map = dict(default_map)
-        applicable, _absent = filter_mapping_to_rows(php_arg, source_rows, id_getter, php_setting_aliases)
-        matched.setdefault("PHP mapping", set()).update(applicable)
-        if applicable:
-            php_map.update(
-                resolve_named_mapping(applicable, source_rows, id_getter, php_setting_aliases, target_rows, id_getter, php_setting_aliases, "PHP mapping")
-            )
-
-        ip_map: dict[int, int] = {}
-        source_ip_rows = collect_ip_mapping_candidates(sel["domains"])
-        if source_ip_rows:
-            applicable, _absent = filter_mapping_to_rows(ip_arg, source_ip_rows, id_getter, ip_aliases)
-            matched.setdefault("IP mapping", set()).update(applicable)
-            if applicable and state.target_ip_rows:
-                ip_map = resolve_named_mapping(applicable, source_ip_rows, id_getter, ip_aliases, state.target_ip_rows, id_getter, ip_aliases, "IP mapping")
+        php_map, _src, _tgt = resolve_php_map(sel["domains"] + sel["subdomains"], state.source_php_settings, state.target_php_settings, php_arg, matched)
+        ip_map = resolve_ip_map(collect_ip_mapping_candidates(sel["domains"]), state.target_ip_rows, ip_arg, matched)
         return php_map, ip_map
 
     def _execute_batch(self) -> list[dict[str, Any]]:
@@ -1120,13 +1106,7 @@ class RunScreen(WizardScreen):
         API failure doesn't block the rest."""
         state = self.state
         inc = state.includes
-        selectors = {
-            "domains": state.args.domains,
-            "subdomains": state.args.subdomains,
-            "databases": state.args.databases,
-            "mailboxes": state.args.mailboxes,
-            "ftp_accounts": state.args.ftp_accounts,
-        }
+        selectors = resource_selector_args(state.args)
         results: list[dict[str, Any]] = []
         matched: dict[str, set[str]] = {}
         state.batch_warnings = []
@@ -1134,7 +1114,7 @@ class RunScreen(WizardScreen):
         ip_arg = parse_mapping_arg(state.args.ip_map, "--ip-map")
         total = len(state.selected_customers)
         for index, customer in enumerate(state.selected_customers):
-            login = str(pick(customer, "loginname", "login", default="customer"))
+            login = customer_login(customer)
             prefix = f"[{index + 1}/{total}] {login} — "
             self.app.call_from_thread(self._batch_note, f"━━━ {prefix.rstrip(' —')} planning…")
             manifest = ""
@@ -1154,44 +1134,24 @@ class RunScreen(WizardScreen):
                     self.app.call_from_thread(self._batch_note, f"{prefix}skipped — no matching domains")
                     results.append({"login": login, "status": "skipped", "context": None, "manifest": manifest})
                     continue
-                manifest_name = slugify(f"{login}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{index}")
+                manifest_name = batch_manifest_name(login, index)
                 runner = self.app.runner_cls(config=state.config, dry_run=state.dry_run, manifest_name=manifest_name, debug=state.args.debug)
                 state.runner = runner
                 manifest = str(getattr(runner, "manifest_path", ""))
-                if inc.get("dns_zones", True):
+                if inc.get("domain_zones", True):
                     sel["domain_zones"], zone_errors = fetch_domain_zones(state.source, sel["domain_names"])
                     for error in zone_errors:
                         self.app.call_from_thread(self._batch_note, f"{prefix}zone skipped — {error}")
                 else:
                     sel["domain_zones"] = []
                 php_map, ip_map = self._batch_maps(sel, php_arg, ip_arg, matched)
-                selection = build_selection(
+                selection = build_customer_selection(
                     customer=customer,
                     target_customer=state.target_customer,
-                    domains=sel["domains"],
-                    subdomains=sel["subdomains"],
-                    databases=sel["databases"],
-                    mailboxes=sel["mailboxes"],
-                    email_forwarders=sel["forwarders"],
-                    email_senders=sel["sender_aliases"],
-                    ftp_accounts=sel["ftps"],
-                    ssh_keys=sel["ssh_keys"],
-                    data_dumps=sel["data_dumps"],
-                    dir_protections=sel["dir_protections"],
-                    dir_options=sel["dir_options"],
-                    domain_zones=sel["domain_zones"],
-                    include_files=inc["files"],
-                    include_databases=inc["databases"],
-                    include_mail=inc["mail"],
-                    include_subdomains=inc["subdomains"],
-                    validate_database_names=inc["validate_db_names"],
+                    sel=sel,
+                    includes=inc,
                     php_setting_map=php_map,
                     ip_mapping=ip_map,
-                    include_certificates=inc["certificates"],
-                    include_domain_zones=inc["dns_zones"],
-                    include_password_sync=inc["password_sync"],
-                    include_forwarders=inc["forwarders"],
-                    include_sender_aliases=inc["sender_aliases"],
                 )
                 migrator = self.app.migrator_cls(config=state.config, source=state.source, target=state.target, runner=runner)
                 migrator.set_progress_callback(self._progress_cb(prefix))
@@ -1201,18 +1161,7 @@ class RunScreen(WizardScreen):
             except Exception as exc:  # noqa: BLE001 — one bad customer must not strand the rest of the batch
                 results.append({"login": login, "status": f"failed: {exc}", "context": None, "manifest": manifest})
                 self.app.call_from_thread(self._batch_note, f"{prefix}FAILED — {exc}")
-        missing = unmatched_tokens(
-            {
-                "domain": selectors["domains"],
-                "subdomain": selectors["subdomains"],
-                "database": selectors["databases"],
-                "mailbox": selectors["mailboxes"],
-                "FTP account": selectors["ftp_accounts"],
-            },
-            matched,
-            php_mapping=php_arg,
-            ip_mapping=ip_arg,
-        )
+        missing = unmatched_tokens(selectors, matched, php_mapping=php_arg, ip_mapping=ip_arg)
         for part in missing:
             warning = f"Selector/mapping tokens matched no customer: {part}"
             self.app.call_from_thread(self._batch_note, f"WARNING — {warning}")
