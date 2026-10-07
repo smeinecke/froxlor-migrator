@@ -4,6 +4,10 @@ Python migration utility with a real terminal UI wizard (Textual) plus a fully
 scriptable non-interactive CLI. Migrates selected Froxlor customer resources
 from one server to another.
 
+<p align="center">
+  <img src="docs/assets/wizard-demo.svg" alt="Animated demo of the interactive migration wizard" width="780">
+</p>
+
 What it does:
 
 - Uses Froxlor API on source and target to manage customers/domains/databases/mail objects
