@@ -72,7 +72,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
         domain = {"ipsandports": [{"id": 1, "ssl": 1}, {"id": 2, "ssl": 0}]}
         ip_mapping = {1: 10, 2: 20}
         mapped, ssl_mapped = ops._mapped_domain_ip_ids(domain, ip_mapping)
-        self.assertEqual([10, 20], mapped)
+        self.assertEqual([20], mapped)
         self.assertEqual([10], ssl_mapped)
 
     def test_is_custom_zone_record_detects_default_records(self) -> None:
@@ -203,7 +203,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
         ops = DummyDomainOps()
         # Set up mapping so ipandport and ssl_ipandport are included
         php_setting_map = {5: 10}
-        ip_mapping = {1: 100}
+        ip_mapping = {1: 100, 2: 200}
         ip_value_mapping = {"1.1.1.1": "2.2.2.2"}
 
         domain = {
@@ -255,7 +255,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
             "mod_fcgid_maxrequests": "20",
             "dont_use_default_ssl_ipandport_if_empty": "1",
             "deactivated": "1",
-            "ipsandports": [{"id": 1, "ssl": 1}],
+            "ipsandports": [{"id": 1, "ssl": 1}, {"id": 2, "ssl": 0}],
         }
 
         name, docroot, payload, mapped_ip_ids = ops._domain_payload(
@@ -270,7 +270,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
 
         self.assertEqual("example.com", name)
         self.assertEqual("/var/www/customer/site", docroot)
-        self.assertEqual([100], mapped_ip_ids)
+        self.assertEqual([100, 200], mapped_ip_ids)
 
         expected = {
             "customerid": 42,
@@ -320,7 +320,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
             "mod_fcgid_maxrequests": 20,
             "dont_use_default_ssl_ipandport_if_empty": True,
             "deactivated": True,
-            "ipandport": [100],
+            "ipandport": [200],
             "ssl_ipandport": [100],
         }
 

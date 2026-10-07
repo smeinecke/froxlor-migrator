@@ -195,6 +195,8 @@ def verify_web_content():
         root / "custgamma" / "secure-demo.test" / "app",
         root / "custgamma" / "redirect-demo.test",
         root / "custgamma" / "forward-demo.test",
+        root / "custepsilon" / "eps-demo.test",
+        root / "custepsilon" / "eps-demo.test" / "sub",
     ]
 
     all_found = True

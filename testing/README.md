@@ -116,18 +116,29 @@ docker compose run --rm --profile bootstrap bootstrap migrate_and_verify
 This performs the full migration flow for seeded test customers. Every apply
 runs through `main.py --non-interactive` (the real CLI path: arg parsing,
 selection, mappings, and confirmation all get covered — not a test-only
-`Selection` shortcut):
+`Selection` shortcut). Multi-customer applies run as a *single* batch
+invocation, so the batch path itself (shared plan table, per-customer
+manifests, tolerant selectors, continue-on-failure, exit status) is covered
+end to end:
 
-1. a `--dry-run` apply, then asserts none of the seed customers exist on the target (guards writes bypassing dry-run)
+1. a `--dry-run` batch apply via `--all-customers`, then asserts none of the four seed customers exist on the target (guards writes bypassing dry-run) and that the batch plan table lists every customer
 2. `custbeta` is pre-created on the target so the apply exercises the existing-customer update path
-3. a real apply (files + databases + mailbox content via doveadm); `custalpha` runs with `--ip-map` so `static-demo.test` rebinds from the source secondary IP:port to the target's
-4. a second apply after deliberately drifting a target DNS record — exercises all update/dedup paths plus the zone delete-and-re-add repair (`DomainZones.update` is a stub in Froxlor)
+3. a real batch apply of `custalpha`+`custbeta`+`custgamma` in one `main.py` invocation (files + databases + mailbox content via doveadm); `--ip-map` uses the named `ip:port:ssl=>ip:port:ssl` token form so `static-demo.test` rebinds from the source secondary IP:port to the target's. The "Batch result" table and per-customer manifest files are asserted.
+4. a second batch apply after deliberately drifting a target DNS record — exercises all update/dedup paths plus the zone delete-and-re-add repair (`DomainZones.update` is a stub in Froxlor)
 5. `verify_migration` for all three customers with `--ip-value-map` (zone record content is translated source-IP → target-IP before comparison), plus the mailbox probe assertion
 6. a negative check: a migrated zone record is deleted on the target and `verify_migration` must fail — then a final apply + verify restores parity
 7. byte-level file-content parity between source and target customer dirs, docroot ownership matching the customer's `panel_customers.guid`, and the `migrator_marker` database row on the target
-8. a domain-only rename: `wp-demo.test` and `static-demo.test` migrate into the pre-created `custdelta` via `--domain-only --target-customer` — `assert_rename.py` verifies target ownership and docroot remapping under the new login
+8. batch failure isolation: with `mailbox_exists=fail`, a `custalpha`/`custbeta` batch yields one ok + one failed row (continue-on-failure) and exits non-zero; `custbeta`/`custgamma` yields all-failed; a `domain_exists=fail` config fails all three — the batch table still renders every row
+9. `custepsilon` resources-only apply (`--domains none`): database + FTP account migrate while the domain and mailboxes stay absent
+10. `custepsilon` selective apply: `--domains`/`--mailboxes`/`--ftp-accounts` subsets, `--include-files no`, `--include-databases no`, all `--skip-*` flags, an explicit `--php-map` and an `ip:port:ssl` `--ip-map` token — `assert_absent.py` proves exactly the flagged resources are missing on target (incl. tampered DB/FTP staying dropped, mail content not transferred, docroot marker file absent)
+11. `custepsilon` full apply: everything migrates, the auto PHP map restores `php8.3` (update-path rewrite), the SSL ip:port binding is remapped, and the mail probe arrives. The stale target Maildir created by step 10's mailbox object is dropped first - `doveadm backup` onto a mailbox with a foreign GUID triggers a dovecot trash-delete that fails under the `maildir:` layout
+12. an `--all-customers` real apply over all four customers, then `verify_migration` incl. `custepsilon`
+13. verify-side `--skip-*` flags: after deleting `custepsilon`'s subdomain + zone record, `verify_migration --skip-subdomains --skip-domain-zones` passes while the unsuppressed run fails — then a repair apply restores parity
+14. CLI error paths: unknown customer token, unmatched `--domains` token (single + batch), and `--domain-only` with a nonexistent `--target-customer` all exit non-zero
+15. the printed batch replay command is executed verbatim and must succeed idempotently
+16. a domain-only rename: `wp-demo.test` and `static-demo.test` migrate into the pre-created `custdelta` via `--domain-only --target-customer` — `assert_rename.py` verifies target ownership and docroot remapping under the new login
 
-It also injects a probe email into source mailbox `alerts@secure-demo.test` before the first apply and asserts that the exact probe reaches the target through the migrator's own `doveadm backup | dsync-server` transfer. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation.
+It also injects probe emails into source mailboxes `alerts@secure-demo.test` and `one@eps-demo.test`, asserting exact delivery through the migrator's own `doveadm backup | dsync-server` transfer — including a negative check that `--include-mail no` leaves the probe behind. Password-hash parity is applied for customer/FTP/mailbox/dir-protection/database logins after API object creation. The image ships `zstd`, so file transfer uses the `pzstd` compression codec rather than the uncompressed fallback.
 
 ## 5) Use with migrator
 

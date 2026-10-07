@@ -336,7 +336,62 @@ class ApiClientTests(unittest.TestCase):
         with patch("froxlor_migrator.api.requests.post", side_effect=fake_post) as mock_post:
             with self.assertRaises(FroxlorApiError):
                 client.call("Customers.listing")
-            self.assertEqual(mock_post.call_count, 2)
+            self.assertEqual(mock_post.call_count, 3)
+
+    def test_call_retries_transient_http_status(self) -> None:
+        client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
+
+        class DummyResponse:
+            def __init__(self, status_code: int, json_data: dict[str, Any] | None = None):
+                self.status_code = status_code
+                self._json_data = json_data or {}
+                self.text = "gateway"
+
+            def json(self):
+                return self._json_data
+
+        calls = {"count": 0}
+
+        def fake_post(*args, **kwargs):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return DummyResponse(503)
+            return DummyResponse(200, {"data": {"ok": True}})
+
+        with patch("froxlor_migrator.api.requests.post", side_effect=fake_post):
+            data = client.call("Domains.get", {"domainname": "example.test"})
+            self.assertEqual({"ok": True}, data)
+            self.assertEqual(calls["count"], 2)
+
+    def test_call_exhausts_retries_on_persistent_transient_status(self) -> None:
+        client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
+
+        class DummyResponse:
+            status_code = 503
+            text = "gateway"
+
+            def json(self):
+                return {}
+
+        with patch("froxlor_migrator.api.requests.post", return_value=DummyResponse()) as mock_post:
+            with self.assertRaises(FroxlorApiError):
+                client.call("Customers.listing")
+            self.assertEqual(mock_post.call_count, 3)
+
+    def test_call_does_not_retry_transient_status_for_mutating_commands(self) -> None:
+        client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")
+
+        class DummyResponse:
+            status_code = 503
+            text = "gateway"
+
+            def json(self):
+                return {}
+
+        with patch("froxlor_migrator.api.requests.post", return_value=DummyResponse()) as mock_post:
+            with self.assertRaises(FroxlorApiError):
+                client.call("Domains.add", {"domainname": "example.test"})
+            self.assertEqual(mock_post.call_count, 1)
 
     def test_test_connection_calls_list_functions(self) -> None:
         client = FroxlorClient(api_url="https://example.invalid", api_key="k", api_secret="s")

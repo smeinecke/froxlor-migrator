@@ -195,6 +195,38 @@ class MigratorCore:
                 return customer
         return None
 
+    def _php_map_with_customer_fallback(
+        self,
+        source_customer: ResourceRow,
+        php_setting_map: dict[int, int] | None,
+    ) -> dict[int, int]:
+        """Fill mapping gaps for the customer-level ``allowed_phpconfigs``.
+
+        The php setting map only covers configs used by *selected* domains,
+        but Froxlor rejects ``phpenabled`` customers whose allowed config list
+        ends up empty. Configs with no mapping entry fall back to the same
+        rule as the default map: same target id when it exists, else the first
+        target php setting.
+        """
+        resolved = dict(php_setting_map or {})
+        if not as_int(pick(source_customer, "phpenabled", default=1)):
+            return resolved
+        missing = [
+            config_id
+            for config_id in self._coerce_id_list(pick(source_customer, "allowed_phpconfigs", default=[]), [])
+            if config_id not in resolved
+        ]
+        if not missing:
+            return resolved
+        target_ids = {as_int(pick(row, "id", default=0)) for row in self.target.list_php_settings()}
+        target_ids.discard(0)
+        if not target_ids:
+            return resolved
+        default_target = min(target_ids)
+        for config_id in missing:
+            resolved[config_id] = config_id if config_id in target_ids else default_target
+        return resolved
+
     def _customer_payload(self, source_customer: ResourceRow, php_setting_map: dict[int, int] | None = None) -> dict[str, Any]:
         source_php_configs = self._coerce_id_list(pick(source_customer, "allowed_phpconfigs", default=[]), [])
         mapped_php_configs = sorted({php_setting_map[config_id] for config_id in source_php_configs if php_setting_map and config_id in php_setting_map})
@@ -265,7 +297,9 @@ class MigratorCore:
             return customer_id
 
         existing = self._find_target_customer(source_customer)
-        payload = self._customer_payload(source_customer, php_setting_map)
+        payload = self._customer_payload(
+            source_customer, self._php_map_with_customer_fallback(source_customer, php_setting_map)
+        )
         if existing:
             customer_id = as_int(pick(existing, "customerid", "id", default=0))
             if not customer_id:

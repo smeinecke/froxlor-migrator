@@ -29,6 +29,11 @@ def _is_idempotent_command(command: str) -> bool:
     return lowered.endswith((".listing", ".list", ".get"))
 
 
+_TRANSIENT_HTTP_STATUSES = frozenset({502, 503, 504})
+_READ_ATTEMPTS = 3
+_RETRY_BACKOFF_SECONDS = 0.5
+
+
 def _redact_params(params: Any) -> Any:
     if isinstance(params, dict):
         redacted: dict[str, Any] = {}
@@ -69,23 +74,12 @@ class FroxlorClient:
             _redact_params(params or {}),
         )
 
-        try:
-            response = requests.post(
-                self.api_url,
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Basic {self._auth_header()}",
-                },
-                data=json.dumps(body),
-                timeout=self.timeout_seconds,
-            )
-        except RequestException as exc:
-            if not _is_idempotent_command(command):
-                logger.debug("Froxlor API request failed (mutating command, not retried): command=%s error=%s", command, exc)
-                raise FroxlorApiError(f"API {command} request failed: {exc}") from exc
-            logger.debug("Froxlor API request failed, retrying once: command=%s error=%s", command, exc)
-            # Network-level failures can be transient; retry once for reads only.
-            time.sleep(0.5)
+        # Reads get retries: connection errors and transient gateway statuses
+        # (502/503/504) can occur while the webserver restarts mid-migration
+        # (e.g. Froxlor regenerating vhost configs). Mutating commands are
+        # never retried - a retried POST could duplicate writes.
+        attempts = _READ_ATTEMPTS if _is_idempotent_command(command) else 1
+        for attempt in range(attempts):
             try:
                 response = requests.post(
                     self.api_url,
@@ -96,9 +90,21 @@ class FroxlorClient:
                     data=json.dumps(body),
                     timeout=self.timeout_seconds,
                 )
-            except RequestException as exc2:
-                logger.debug("Froxlor API retry failed: command=%s error=%s", command, exc2)
-                raise FroxlorApiError(f"API {command} request failed: {exc2}") from exc2
+            except RequestException as exc:
+                if attempt + 1 >= attempts:
+                    raise FroxlorApiError(f"API {command} request failed: {exc}") from exc
+                logger.debug("Froxlor API request failed, retrying: command=%s error=%s", command, exc)
+                time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            if response.status_code in _TRANSIENT_HTTP_STATUSES and attempt + 1 < attempts:
+                logger.debug(
+                    "Froxlor API transient HTTP %s, retrying: command=%s",
+                    response.status_code,
+                    command,
+                )
+                time.sleep(_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                continue
+            break
 
         logger.debug("Froxlor API response: command=%s http_status=%s", command, response.status_code)
 

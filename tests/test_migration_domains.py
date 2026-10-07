@@ -74,7 +74,7 @@ class MigratorDomainOpsTests(unittest.TestCase):
         ops = StubDomainOps(StubClient({}), StubClient({}))
         domain = {"ipsandports": [{"id": 1, "ssl": 1}, {"id": 2, "ssl": 0}]}
         mapped, ssl_mapped = ops._mapped_domain_ip_ids(domain, {1: 10, 2: 20})
-        self.assertEqual([10, 20], mapped)
+        self.assertEqual([20], mapped)
         self.assertEqual([10], ssl_mapped)
 
 

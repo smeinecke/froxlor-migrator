@@ -74,13 +74,24 @@ def to_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def ensure_ip_port(api: FroxlorApi, ip: str, port: int) -> int:
+def ensure_ip_port(api: FroxlorApi, ip: str, port: int, ssl: bool = False) -> int:
     for row in api.listing("IpsAndPorts.listing"):
-        if str(row.get("ip") or "").strip() == ip and to_int(row.get("port"), 0) == port:
+        if (
+            str(row.get("ip") or "").strip() == ip
+            and to_int(row.get("port"), 0) == port
+            and to_int(row.get("ssl"), 0) == int(ssl)
+        ):
             return to_int(row.get("id"), 0)
-    api.call("IpsAndPorts.add", {"ip": ip, "port": port})
+    payload: dict[str, Any] = {"ip": ip, "port": port}
+    if ssl:
+        payload["ssl"] = True
+    api.call("IpsAndPorts.add", payload)
     for row in api.listing("IpsAndPorts.listing"):
-        if str(row.get("ip") or "").strip() == ip and to_int(row.get("port"), 0) == port:
+        if (
+            str(row.get("ip") or "").strip() == ip
+            and to_int(row.get("port"), 0) == port
+            and to_int(row.get("ssl"), 0) == int(ssl)
+        ):
             return to_int(row.get("id"), 0)
     raise ApiError(f"Could not ensure IP:port {ip}:{port}")
 
@@ -92,11 +103,12 @@ def main() -> int:
     parser.add_argument("--api-secret", required=True)
     parser.add_argument("--ip", required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--ssl", action="store_true", help="Create an SSL ip:port row")
     args = parser.parse_args()
 
     api = FroxlorApi(args.api_url, args.api_key, args.api_secret)
-    ip_id = ensure_ip_port(api, args.ip, args.port)
-    print(f"{args.ip}:{args.port} -> id {ip_id}")
+    ip_id = ensure_ip_port(api, args.ip, args.port, ssl=args.ssl)
+    print(f"{args.ip}:{args.port} (ssl={int(args.ssl)}) -> id {ip_id}")
     return 0
 
 

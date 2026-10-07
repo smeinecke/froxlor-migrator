@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
 
 from froxlor_migrator.froxlor_mysql import extract_sql_credentials, extract_sql_root_credentials, mysql_defaults_content
 from froxlor_migrator.migrate import Migrator
@@ -33,6 +34,34 @@ class CustomerPayloadTests(unittest.TestCase):
 
         payload = migrator._customer_payload({"email": "user@example.test", "allowed_phpconfigs": "[9]"}, {1: 10})
         self.assertNotIn("allowed_phpconfigs", payload)
+
+    def test_php_map_fallback_keeps_existing_target_id(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.target = SimpleNamespace(list_php_settings=lambda: [{"id": 3}, {"id": 5}])
+
+        resolved = migrator._php_map_with_customer_fallback({"phpenabled": 1, "allowed_phpconfigs": "[2, 5]"}, {2: 20})
+
+        self.assertEqual({2: 20, 5: 5}, resolved)
+
+    def test_php_map_fallback_uses_first_target_when_source_id_absent(self) -> None:
+        migrator = object.__new__(Migrator)
+        migrator.target = SimpleNamespace(list_php_settings=lambda: [{"id": 4}, {"id": 7}])
+
+        resolved = migrator._php_map_with_customer_fallback({"phpenabled": 1, "allowed_phpconfigs": "[9]"}, {})
+
+        self.assertEqual({9: 4}, resolved)
+
+    def test_php_map_fallback_skipped_without_php(self) -> None:
+        migrator = object.__new__(Migrator)
+
+        def _boom() -> list[dict]:
+            raise AssertionError("list_php_settings must not be called")
+
+        migrator.target = SimpleNamespace(list_php_settings=_boom)
+
+        resolved = migrator._php_map_with_customer_fallback({"phpenabled": 0, "allowed_phpconfigs": "[9]"}, {})
+
+        self.assertEqual({}, resolved)
 
     def test_extract_sql_root_credentials_from_userdata(self) -> None:
         content = """

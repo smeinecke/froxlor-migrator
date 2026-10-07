@@ -203,6 +203,9 @@ class MigratorDomainOps:
         return text.strip()
 
     def _mapped_domain_ip_ids(self, domain: ResourceRow, ip_mapping: dict[int, int]) -> tuple[list[int], list[int]]:
+        # Froxlor stores ipandport + ssl_ipandport in one link table keyed on
+        # (domainid, ipandportid) - the two lists must stay disjoint or the
+        # insert fails with a duplicate-key error.
         mapped_ip_ids: list[int] = []
         mapped_ssl_ip_ids: list[int] = []
         for ip_row in pick(domain, "ipsandports", default=[]) or []:
@@ -210,9 +213,10 @@ class MigratorDomainOps:
             target_ip_id = ip_mapping.get(source_ip_id)
             if not target_ip_id:
                 continue
-            mapped_ip_ids.append(target_ip_id)
             if as_int(pick(ip_row, "ssl", default=0)) == 1:
                 mapped_ssl_ip_ids.append(target_ip_id)
+            else:
+                mapped_ip_ids.append(target_ip_id)
         return mapped_ip_ids, mapped_ssl_ip_ids
 
     def _domain_payload(
@@ -288,7 +292,9 @@ class MigratorDomainOps:
             payload["ipandport"] = sorted(set(mapped_ip_ids))
         if mapped_ssl_ip_ids:
             payload["ssl_ipandport"] = sorted(set(mapped_ssl_ip_ids))
-        return domain_name, target_docroot, payload, mapped_ip_ids
+        # Callers verify against every binding on the target row - return the
+        # union of both (disjoint) mapped lists.
+        return domain_name, target_docroot, payload, sorted(set(mapped_ip_ids + mapped_ssl_ip_ids))
 
     def _domain_comparisons(self, target_docroot: str, payload: dict[str, Any], target_domain: ResourceRow) -> list[tuple[str, Any, Any]]:
         return [

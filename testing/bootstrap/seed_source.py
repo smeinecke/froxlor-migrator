@@ -32,7 +32,12 @@ def safe_extract_tar(archive: tarfile.TarFile, destination: Path) -> None:
 
 def _pw(length: int = 20) -> str:
     alphabet = string.ascii_letters + string.digits + "-_"
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+    # Froxlor's default complexity requires at least one lower- and one
+    # uppercase letter - guarantee both instead of relying on chance.
+    chars = [secrets.choice(string.ascii_lowercase), secrets.choice(string.ascii_uppercase)]
+    chars += [secrets.choice(alphabet) for _ in range(length - len(chars))]
+    secrets.SystemRandom().shuffle(chars)
+    return "".join(chars)
 
 
 class ApiError(RuntimeError):
@@ -315,13 +320,24 @@ def ensure_php_settings(api: FroxlorApi) -> list[int]:
     return ids
 
 
-def ensure_ip_port(api: FroxlorApi, ip: str, port: int) -> int:
+def ensure_ip_port(api: FroxlorApi, ip: str, port: int, ssl: bool = False) -> int:
     for row in api.listing("IpsAndPorts.listing"):
-        if str(_pick(row, "ip", default="")).strip() == ip and _to_int(_pick(row, "port", default=0)) == port:
+        if (
+            str(_pick(row, "ip", default="")).strip() == ip
+            and _to_int(_pick(row, "port", default=0)) == port
+            and _to_int(_pick(row, "ssl", default=0)) == int(ssl)
+        ):
             return _to_int(_pick(row, "id", default=0))
-    api.call("IpsAndPorts.add", {"ip": ip, "port": port})
+    payload: dict[str, Any] = {"ip": ip, "port": port}
+    if ssl:
+        payload["ssl"] = True
+    api.call("IpsAndPorts.add", payload)
     for row in api.listing("IpsAndPorts.listing"):
-        if str(_pick(row, "ip", default="")).strip() == ip and _to_int(_pick(row, "port", default=0)) == port:
+        if (
+            str(_pick(row, "ip", default="")).strip() == ip
+            and _to_int(_pick(row, "port", default=0)) == port
+            and _to_int(_pick(row, "ssl", default=0)) == int(ssl)
+        ):
             return _to_int(_pick(row, "id", default=0))
     raise ApiError(f"Could not ensure IP:port {ip}:{port}")
 
@@ -1139,10 +1155,22 @@ def main() -> None:
         default_php_setting_id=php_a,
         mysql_server_id=mysql_server_id,
     )
+    # Fourth customer for the selector/skip-flag coverage runs: every resource
+    # type gets seeded so a selective apply leaves provable absences on target.
+    customer_d = ensure_customer(
+        api,
+        login="custepsilon",
+        email="custepsilon@example.test",
+        firstname="Epsilon",
+        lastname="Customer",
+        default_php_setting_id=php_a,
+        mysql_server_id=mysql_server_id,
+    )
 
     cust_a_id = _to_int(_pick(customer_a, "customerid", "id", default=0))
     cust_b_id = _to_int(_pick(customer_b, "customerid", "id", default=0))
     cust_c_id = _to_int(_pick(customer_c, "customerid", "id", default=0))
+    cust_d_id = _to_int(_pick(customer_d, "customerid", "id", default=0))
 
     ensure_domain(
         api,
@@ -1268,6 +1296,43 @@ def main() -> None:
         },
     )
 
+    # custepsilon fixtures: one of everything so --domains/--mailboxes/
+    # --ftp-accounts subsets and every --skip-* flag produce provable target
+    # absences. The SSL ip:port binding exercises the ssl_ipandport half of
+    # --ip-map (the :80 secondary IP covers the non-SSL half for custalpha).
+    secondary_ssl_ip_id = ensure_ip_port(api, secondary_ip, 443, ssl=True)
+    ensure_domain(
+        api,
+        customer_id=cust_d_id,
+        domain="eps-demo.test",
+        documentroot="/data/customers/custepsilon/eps-demo.test",
+        phpsettingid=php_a,
+        is_email_domain=True,
+        extra_settings={
+            "sslenabled": True,
+            "letsencrypt": False,
+            "isbinddomain": True,
+            "ssl_ipandport": [secondary_ssl_ip_id],
+            "description": "selector/skip coverage domain",
+        },
+    )
+    eps_subdomain = ensure_subdomain(
+        api,
+        customer_id=cust_d_id,
+        domain="eps-demo.test",
+        subdomain="eps-sub",
+        path="/data/customers/custepsilon/eps-demo.test/sub",
+        phpsettingid=php_a,
+    )
+    ensure_zone_record(
+        api,
+        domain="eps-demo.test",
+        record="migrator-test",
+        record_type="TXT",
+        content="eps-fixture-0001",
+        ttl=18000,
+    )
+
     wp_db, wp_pw = ensure_database(
         api,
         customer_id=cust_a_id,
@@ -1295,6 +1360,20 @@ def main() -> None:
         db_root_pass=db_root_pass,
         panel_db_name=panel_db_name,
     )
+    eps_db, _eps_pw = ensure_database(
+        api,
+        customer_id=cust_d_id,
+        customer_login="custepsilon",
+        custom_suffix="main",
+        description="Epsilon main database",
+        mysql_server=mysql_server_id,
+        db_host=db_host,
+        db_port=db_port,
+        db_root_user=db_root_user,
+        db_root_pass=db_root_pass,
+        panel_db_name=panel_db_name,
+    )
+    seed_db_marker(eps_db, db_host, db_port, db_root_user, db_root_pass)
 
     ensure_mailbox(api, customer_id=cust_b_id, mailbox="info@mail-demo.test", catchall=True)
     ensure_mailbox(api, customer_id=cust_b_id, mailbox="sales@mail-demo.test", catchall=False)
@@ -1337,11 +1416,37 @@ def main() -> None:
         db_root_pass=db_root_pass,
         panel_db_name=panel_db_name,
     )
+    ensure_mailbox(api, customer_id=cust_d_id, mailbox="one@eps-demo.test", catchall=False)
+    ensure_mailbox(api, customer_id=cust_d_id, mailbox="two@eps-demo.test", catchall=False)
+    ensure_email_forwarder(
+        api,
+        customer_id=cust_d_id,
+        mailbox="one@eps-demo.test",
+        destination="two@eps-demo.test",
+    )
+    ensure_email_sender_alias(
+        api,
+        customer_id=cust_d_id,
+        mailbox="two@eps-demo.test",
+        allowed_sender="one@eps-demo.test",
+        db_host=db_host,
+        db_port=db_port,
+        db_root_user=db_root_user,
+        db_root_pass=db_root_pass,
+        panel_db_name=panel_db_name,
+    )
     ensure_ftp_account(
         api,
         customer_id=cust_c_id,
         username="custgammaftp1",
         path="secure-demo.test",
+        login_enabled=True,
+    )
+    ensure_ftp_account(
+        api,
+        customer_id=cust_d_id,
+        username="custepsilonftp1",
+        path="eps-demo.test",
         login_enabled=True,
     )
     ensure_dir_protection(
@@ -1382,6 +1487,7 @@ def main() -> None:
     cert_pem, key_pem = generate_self_signed_cert("secure-demo.test")
     ensure_certificate(api, "secure-demo.test", cert_pem, key_pem)
     ensure_certificate(api, "redirect-demo.test", cert_pem, key_pem)
+    ensure_certificate(api, "eps-demo.test", cert_pem, key_pem)
 
     set_domain_dkim_keys(
         "secure-demo.test",
@@ -1440,6 +1546,8 @@ def main() -> None:
     forward_dir = content_root / "custgamma" / "forward-demo.test"
     secure_sub_dir = content_root / "custgamma" / "secure-demo.test" / "app"
     secure_protected_dir = content_root / "custgamma" / "secure-demo.test" / "protected"
+    eps_dir = content_root / "custepsilon" / "eps-demo.test"
+    eps_sub_dir = content_root / "custepsilon" / "eps-demo.test" / "sub"
 
     ensure_wordpress_files(wp_dir, wp_db, wp_pw)
     ensure_static_site(static_dir)
@@ -1450,6 +1558,10 @@ def main() -> None:
     ensure_static_site(forward_dir)
     ensure_static_site(secure_sub_dir)
     ensure_static_site(secure_protected_dir)
+    ensure_static_site(eps_dir)
+    ensure_static_site(eps_sub_dir)
+    # Marker file proves --include-files no leaves the target docroot empty.
+    (eps_dir / "migrator-marker.txt").write_text("files-transfer-marker", encoding="utf-8")
 
     refreshed_secure_domain = None
     for row in api.listing("Domains.listing"):
@@ -1465,7 +1577,7 @@ def main() -> None:
     ])
 
     summary = {
-        "customers": ["custalpha", "custbeta", "custgamma"],
+        "customers": ["custalpha", "custbeta", "custgamma", "custepsilon"],
         "domains": [
             "wp-demo.test",
             "static-demo.test",
@@ -1474,21 +1586,29 @@ def main() -> None:
             "secure-demo.test",
             "redirect-demo.test",
             "forward-demo.test",
+            "eps-demo.test",
         ],
-        "subdomains": [secure_subdomain],
+        "subdomains": [secure_subdomain, eps_subdomain],
         "mailboxes": [
             "info@mail-demo.test",
             "sales@mail-demo.test",
             "alerts@secure-demo.test",
             "ops@secure-demo.test",
+            "one@eps-demo.test",
+            "two@eps-demo.test",
         ],
         "wordpress_db": wp_db,
+        "epsilon_db": eps_db,
         "php_settings_used": [php_a, php_b],
         "php_settings_profiles": ["php8.3", "php8.4"],
         "domain_settings": {
             "empty-demo.test": {
                 "ssl_enabled": 1,
                 "letsencrypt": 1,
+            },
+            "eps-demo.test": {
+                "ssl_enabled": 1,
+                "letsencrypt": 0,
             },
             "secure-demo.test": {
                 "ssl_enabled": 1,
@@ -1533,20 +1653,33 @@ def main() -> None:
             {
                 "email": "alerts@secure-demo.test",
                 "destination": "ops@secure-demo.test",
-            }
+            },
+            {
+                "email": "one@eps-demo.test",
+                "destination": "two@eps-demo.test",
+            },
         ],
         "email_sender_aliases": [
             {
                 "email": "ops@secure-demo.test",
                 "allowed_sender": "alerts@secure-demo.test",
-            }
+            },
+            {
+                "email": "two@eps-demo.test",
+                "allowed_sender": "one@eps-demo.test",
+            },
         ],
         "ftp_accounts": [
             {
                 "username": "custgammaftp1",
                 "path": "secure-demo.test",
                 "login_enabled": 1,
-            }
+            },
+            {
+                "username": "custepsilonftp1",
+                "path": "eps-demo.test",
+                "login_enabled": 1,
+            },
         ],
         "dir_protections": [
             {
@@ -1611,6 +1744,13 @@ def main() -> None:
                 "record": "direct",
                 "type": "A",
                 "content": os.environ.get("SOURCE_SECONDARY_IP", "10.66.77.1"),
+            },
+            {
+                "domain": "eps-demo.test",
+                "record": "migrator-test",
+                "type": "TXT",
+                # Froxlor encloses TXT content in double quotes on add
+                "content": '"eps-fixture-0001"',
             },
         ],
         "domain_redirects": [

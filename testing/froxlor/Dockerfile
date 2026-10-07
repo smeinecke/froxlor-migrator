@@ -46,6 +46,7 @@ RUN apt-get update \
         php8.4-cli \
         php8.4-fpm \
         sudo \
+        zstd \
     && rm -rf /var/lib/apt/lists/*
 
 RUN rm -rf /var/www/html/* \

@@ -125,6 +125,7 @@ uv run --no-project --with requests "$SCRIPT_DIR/ensure_php_profiles.py" \
 	--profile php8.4
 
 # Secondary IPs on both panels so --ip-map / zone IP-rewrite is exercised.
+# The :443 rows let --ip-map cover the ssl_ipandport half of domain bindings.
 uv run --no-project --with requests "$SCRIPT_DIR/ensure_ip_port.py" \
 	--api-url "${SOURCE_API_URL}" --api-key "${SOURCE_API_KEY}" --api-secret "${SOURCE_API_SECRET}" \
 	--ip "${SOURCE_SECONDARY_IP:-10.66.77.1}" --port 80
@@ -132,6 +133,14 @@ uv run --no-project --with requests "$SCRIPT_DIR/ensure_ip_port.py" \
 uv run --no-project --with requests "$SCRIPT_DIR/ensure_ip_port.py" \
 	--api-url "${TARGET_API_URL}" --api-key "${TARGET_API_KEY}" --api-secret "${TARGET_API_SECRET}" \
 	--ip "${TARGET_SECONDARY_IP:-10.66.77.2}" --port 80
+
+uv run --no-project --with requests "$SCRIPT_DIR/ensure_ip_port.py" \
+	--api-url "${SOURCE_API_URL}" --api-key "${SOURCE_API_KEY}" --api-secret "${SOURCE_API_SECRET}" \
+	--ip "${SOURCE_SECONDARY_IP:-10.66.77.1}" --port 443 --ssl
+
+uv run --no-project --with requests "$SCRIPT_DIR/ensure_ip_port.py" \
+	--api-url "${TARGET_API_URL}" --api-key "${TARGET_API_KEY}" --api-secret "${TARGET_API_SECRET}" \
+	--ip "${TARGET_SECONDARY_IP:-10.66.77.2}" --port 443 --ssl
 
 "$SCRIPT_DIR/seed_source.sh"
 "$SCRIPT_DIR/verify_seed.sh"

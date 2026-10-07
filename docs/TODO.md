@@ -847,3 +847,67 @@ Testing: `tests/test_wizard.py` drives the app via `run_test()` + Pilot
 with injected dummy clients/migrator — happy path, domain-only target
 picker, back-nav state preservation, connect-error retry, run-error
 manifest display.
+
+### Round 13 — Feature-complete e2e: batch path + flag surface
+
+`run_migration_apply.py` spawned `main.py` once per customer, so the batch
+front-end (`_plan_all_customers` / `_execute_planned`) had zero e2e
+coverage. The script now supports `--batch` (single process, comma-separated
+`--source-customer`), `--all-customers`, `--php-map`, and `--expect-fail`
+with proper exit-code propagation; `migrate_and_verify.sh` was restructured
+around it:
+
+- Dry-run `--all-customers` batch asserting the plan table lists all four
+  customers, then a real single-process apply of three customers with
+  `Batch result` table + per-customer manifest assertions
+  (`assert_manifests.py`).
+- New `custepsilon` fixture whose resources make every skip flag produce a
+  detectable absence: resources-only (`--domains none`) and selective-skip
+  (`--include-files/databases/mail no`, all `--skip-*`, explicit
+  `--php-map`, `ip:port:ssl` `--ip-map`) runs asserted via the new generic
+  `assert_absent.py` helper.
+- SSL `ipandports` rows (`:443`) seeded on both panels so `--ip-map` covers
+  SSL bindings for real.
+- Batch failure isolation via `domain_exists=fail` /
+  `mailbox_exists=fail` config variants: continue-on-failure, per-row
+  status, non-zero batch exit, no unintended mutations.
+- CLI error paths (unknown customer, unmatched selectors single + batch,
+  `--domain-only` to a nonexistent target) assert non-zero exits.
+- The printed batch replay command is extracted and executed verbatim.
+- Verify-side `--skip-subdomains` / `--skip-domain-zones` proven: deleted
+  subdomain + zone record passes suppressed and fails unsuppressed.
+- `zstd` added to the test image so `transfer.py` selects the `pzstd`
+  codec instead of the uncompressed fallback.
+
+Product issues the new coverage exposed (all fixed in this round):
+
+- `Customers.add` sent `phpenabled=1` without `allowed_phpconfigs` when no
+  domains were selected (`--domains none`) - Froxlor rejects the create.
+  `_php_map_with_customer_fallback` now maps customer-level allowed configs
+  to same-id or the first available target PHP setting.
+- `ipandport` + `ssl_ipandport` payloads could contain the same target id
+  (SSL bindings were appended to both lists) - Froxlor's link-table PK made
+  the insert fail. The mapped lists are now disjoint; verification still
+  checks the union.
+- API `call()` only retried connection errors for read commands. Froxlor's
+  cron regenerates vhost configs mid-migration and briefly bounces php-fpm
+  (HTTP 502/503/504), killing a migration. Reads now retry transient 5xx
+  with linear backoff; mutations stay single-attempt (a retried POST could
+  duplicate writes).
+
+Testbed quirks worked around (documented, not product bugs):
+
+- `doveadm backup` onto a target mailbox that exists with a different GUID
+  triggers a dovecot trash-delete that renames the INBOX Maildir into a
+  child of itself (EINVAL under the `maildir:` layout). The selective-apply
+  flow drops the stale target Maildir before the full apply; re-running a
+  real migration onto mailboxes previously synced by doveadm is unaffected
+  (GUIDs match after the first backup).
+- Froxlor names extra FTP accounts `<login>ftp<N>` from a per-customer
+  `ftp_lastaccountnumber` counter; recreating a deleted account yields a
+  new name, so the tamper step resets the counter for deterministic
+  assertions.
+
+Still excluded (documented): real ACME issuance on `.test` domains and a
+live Textual wizard Pilot run against containers (wizard covered by unit
+tests; headless path is what e2e exercises).
