@@ -1,6 +1,6 @@
 services:
   source-db:
-    image: mariadb:11
+    image: mariadb:13
     restart: unless-stopped
     command: ["--skip-name-resolve=0"]
     environment:
@@ -17,7 +17,7 @@ services:
       - source-net
 
   target-db:
-    image: mariadb:11
+    image: mariadb:13
     restart: unless-stopped
     command: ["--skip-name-resolve=0"]
     environment:
